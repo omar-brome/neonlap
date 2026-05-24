@@ -51,6 +51,7 @@ ExportedObj/
 *.csproj
 *.unityproj
 *.sln
+*.slnx
 *.suo
 *.tmp
 *.user
@@ -105,3 +106,46 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Auto-generated cache in Assets folder
+/[Aa]ssets/[Ss]ceneDependencyCache*
+
+# --- OS files (see github/gitignore Global/macOS.gitignore) ---
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- IDE / editor local settings ---
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+*.code-workspace
+
+# Cursor local agent state (project rules under .cursor/rules/ are kept)
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+
+# Plastic SCM
+.plastic/
+ignore.conf
+
+# Unity Accelerator / Collaborate local cache
+/[Uu]nity[Cc]ollaborate/
+
+# Packed Addressables / local build output (extra safety)
+/[Aa]ssets/[Aa]ddressableAssetsData/**/Android/
+/[Aa]ssets/[Aa]ddressableAssetsData/**/iOS/
+/[Aa]ssets/[Aa]ddressableAssetsData/**/StandaloneWindows64/
+
+# Profiling / diagnostics
+/[Mm]emoryCaptures/*.png
+*.stackdump
