@@ -11,6 +11,7 @@ namespace NeonLap.UI
         [SerializeField] Text lapTimerText;
         [SerializeField] Text raceTimerText;
         [SerializeField] Text bestLapText;
+        [SerializeField] Text positionText;
         [SerializeField] Text countdownText;
         [SerializeField] Text countdownSubtitleText;
         [SerializeField] GameObject countdownPanel;
@@ -26,6 +27,7 @@ namespace NeonLap.UI
             Text lapTimer,
             Text raceTimer,
             Text bestLap,
+            Text position,
             Text countdown,
             Text countdownSubtitle,
             GameObject countdownPanelObject,
@@ -39,6 +41,7 @@ namespace NeonLap.UI
             lapTimerText = lapTimer;
             raceTimerText = raceTimer;
             bestLapText = bestLap;
+            positionText = position;
             countdownText = countdown;
             countdownSubtitleText = countdownSubtitle;
             countdownPanel = countdownPanelObject;
@@ -125,6 +128,20 @@ namespace NeonLap.UI
             {
                 var best = raceManager.BestLapTime;
                 bestLapText.text = best > 0f ? $"Best {FormatTime(best)}" : "Best --:--.--";
+            }
+
+            if (positionText != null && (raceManager.State == RaceState.Racing || raceManager.State == RaceState.Finished))
+            {
+                var position = raceManager.GetPlayerPosition();
+                var total = Mathf.Max(raceManager.TotalRacers, 1);
+                positionText.text = $"Position {GetPlacementLabel(position)} / {total}";
+                positionText.color = position == 1
+                    ? new Color(0.45f, 1f, 1f)
+                    : Color.white;
+            }
+            else if (positionText != null)
+            {
+                positionText.text = string.Empty;
             }
         }
 

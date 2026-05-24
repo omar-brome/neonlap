@@ -37,6 +37,7 @@ namespace NeonLap.Race
         public int CurrentLap => playerRacer != null ? playerRacer.CurrentLap : 1;
         public int TotalLaps => totalLaps;
         public int PlayerFinishPosition => playerFinishPosition;
+        public int TotalRacers => racers.Count;
         public float RaceTime => State == RaceState.Racing || State == RaceState.Finished
             ? Time.time - raceStartTime
             : 0f;
@@ -141,9 +142,17 @@ namespace NeonLap.Race
 
         void FinishPlayerRace()
         {
-            playerFinishPosition = CalculatePlacement(playerRacer);
+            playerFinishPosition = GetPlayerPosition();
             SetState(RaceState.Finished);
             OnRaceFinished?.Invoke(playerFinishPosition);
+        }
+
+        public int GetPlayerPosition()
+        {
+            if (playerRacer == null)
+                return 1;
+
+            return CalculatePlacement(playerRacer);
         }
 
         int CalculatePlacement(RacerProgress player)

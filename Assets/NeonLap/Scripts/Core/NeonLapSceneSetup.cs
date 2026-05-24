@@ -332,6 +332,8 @@ namespace NeonLap.Core
             var lapTimer = CreateText(canvasGo.transform, "LapTimer", new Vector2(-20f, -20f), TextAnchor.UpperRight, 28);
             var raceTimer = CreateText(canvasGo.transform, "RaceTimer", new Vector2(-20f, -60f), TextAnchor.UpperRight, 24);
             var bestLap = CreateText(canvasGo.transform, "BestLap", new Vector2(20f, -60f), TextAnchor.UpperLeft, 24);
+            var positionText = CreateText(canvasGo.transform, "PositionText", new Vector2(20f, -100f), TextAnchor.UpperLeft, 28);
+            positionText.color = Color.white;
 
             var countdownPanel = new GameObject("CountdownPanel");
             countdownPanel.transform.SetParent(canvasGo.transform, false);
@@ -382,6 +384,7 @@ namespace NeonLap.Core
                 lapTimer,
                 raceTimer,
                 bestLap,
+                positionText,
                 countdownText,
                 countdownSubtitle,
                 countdownPanel,
