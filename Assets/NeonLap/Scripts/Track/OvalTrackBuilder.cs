@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using NeonLap.Core;
+using NeonLap.Environment;
 using NeonLap.Race;
 using UnityEngine;
 
@@ -10,7 +11,7 @@ namespace NeonLap.Track
         [Header("Oval Dimensions")]
         [SerializeField] float straightLength = 60f;
         [SerializeField] float turnRadius = 25f;
-        [SerializeField] float trackWidth = 14f;
+        [SerializeField] float trackWidth = 26f;
         [SerializeField] int segmentsPerTurn = 16;
         [SerializeField] int straightSubdivisions = 6;
 
@@ -25,22 +26,44 @@ namespace NeonLap.Track
 
         Transform trackRoot;
         Transform aiWaypointRoot;
+        TrackLayout layout = TrackLayout.Oval;
         readonly List<Transform> checkpointTransforms = new();
         readonly List<Transform> aiWaypointTransforms = new();
+        readonly List<Vector3> centerlinePoints = new();
 
         public IReadOnlyList<Transform> CheckpointTransforms => checkpointTransforms;
         public IReadOnlyList<Transform> AiWaypointTransforms => aiWaypointTransforms;
+        public IReadOnlyList<Vector3> CenterlinePoints => centerlinePoints;
         public Vector3 StartPosition { get; private set; }
         public Quaternion StartRotation { get; private set; }
+        public float TrackWidth => trackWidth;
+        public Vector2 EnvironmentHalfExtents { get; private set; } = new(80f, 50f);
 
         public void Configure(TrackDefinition definition, Material surface, Material edge, Material barrier)
         {
             if (definition != null)
             {
+                layout = definition.layout;
                 straightLength = definition.straightLength;
                 turnRadius = definition.turnRadius;
                 trackWidth = definition.trackWidth;
                 checkpointCount = definition.checkpointCount;
+
+                switch (layout)
+                {
+                    case TrackLayout.TriOvalSpeedway:
+                        straightSubdivisions = 8;
+                        segmentsPerTurn = 18;
+                        break;
+                    case TrackLayout.TechnicalRing:
+                        straightSubdivisions = 10;
+                        segmentsPerTurn = 20;
+                        break;
+                    default:
+                        straightSubdivisions = 6;
+                        segmentsPerTurn = 16;
+                        break;
+                }
             }
 
             trackSurfaceMaterial = surface;
@@ -65,13 +88,21 @@ namespace NeonLap.Track
             aiWaypointRoot.SetParent(transform, false);
 
             var centerline = BuildCenterline();
+            centerlinePoints.Clear();
+            centerlinePoints.AddRange(centerline);
+            EnvironmentHalfExtents = TrackCenterlineBuilder.ComputeEnvironmentHalfExtents(centerline, trackWidth);
+            TrackRoadMarkingBuilder.ApplyAsphaltLook(trackSurfaceMaterial, trackEdgeMaterial);
             BuildSurface(centerline);
+            TrackRoadMarkingBuilder.Build(trackRoot, centerline, trackWidth, layout);
             BuildEdges(centerline);
             BuildBarriers(centerline);
             BuildAiWaypoints(centerline);
 
             if (createCheckpoints)
+            {
                 BuildCheckpoints(centerline);
+                AlignFinishCheckpoint(centerline);
+            }
 
             if (centerline.Count > 1)
             {
@@ -87,38 +118,8 @@ namespace NeonLap.Track
 
         List<Vector3> BuildCenterline()
         {
-            var points = new List<Vector3>();
-            var half = straightLength * 0.5f;
-
-            AppendStraight(points, new Vector3(-half, 0f, turnRadius), new Vector3(half, 0f, turnRadius));
-            AppendArc(points, new Vector3(half, 0f, 0f), 90f, -90f);
-            AppendStraight(points, new Vector3(half, 0f, -turnRadius), new Vector3(-half, 0f, -turnRadius));
-            AppendArc(points, new Vector3(-half, 0f, 0f), -90f, -270f);
-
-            return points;
-        }
-
-        void AppendStraight(List<Vector3> points, Vector3 from, Vector3 to)
-        {
-            var startStep = points.Count > 0 ? 1 : 0;
-            for (var i = startStep; i <= straightSubdivisions; i++)
-            {
-                var t = i / (float)straightSubdivisions;
-                points.Add(Vector3.Lerp(from, to, t));
-            }
-        }
-
-        void AppendArc(List<Vector3> points, Vector3 center, float startDegrees, float endDegrees)
-        {
-            for (var i = 1; i <= segmentsPerTurn; i++)
-            {
-                var t = i / (float)segmentsPerTurn;
-                var angle = Mathf.Lerp(startDegrees, endDegrees, t) * Mathf.Deg2Rad;
-                points.Add(new Vector3(
-                    center.x + Mathf.Cos(angle) * turnRadius,
-                    0f,
-                    center.z + Mathf.Sin(angle) * turnRadius));
-            }
+            return TrackCenterlineBuilder.Build(layout, straightLength, turnRadius, segmentsPerTurn,
+                straightSubdivisions);
         }
 
         void BuildSurface(List<Vector3> centerline)
@@ -158,7 +159,7 @@ namespace NeonLap.Track
         void BuildBarriers(List<Vector3> centerline)
         {
             var count = centerline.Count;
-            var barrierOffset = trackWidth * 0.5f + 1.5f;
+            var barrierOffset = trackWidth * 0.5f + 5f;
 
             for (var i = 0; i < count; i++)
             {
@@ -171,9 +172,9 @@ namespace NeonLap.Track
                 var rotation = Quaternion.LookRotation(direction);
 
                 CreateSegment("BarrierL_" + i, mid + right * barrierOffset, rotation,
-                    new Vector3(0.8f, 1.2f, length), barrierMaterial, NeonLapLayers.Track, "Barrier", addCollider: true);
+                    new Vector3(0.8f, 1.2f, length), barrierMaterial, NeonLapLayers.Obstacle, "Barrier", addCollider: true);
                 CreateSegment("BarrierR_" + i, mid - right * barrierOffset, rotation,
-                    new Vector3(0.8f, 1.2f, length), barrierMaterial, NeonLapLayers.Track, "Barrier", addCollider: true);
+                    new Vector3(0.8f, 1.2f, length), barrierMaterial, NeonLapLayers.Obstacle, "Barrier", addCollider: true);
             }
         }
 
@@ -215,13 +216,28 @@ namespace NeonLap.Track
 
                 var trigger = cpGo.AddComponent<BoxCollider>();
                 trigger.isTrigger = true;
-                trigger.size = new Vector3(trackWidth, 4f, 4f);
+                var isFinish = i == 0;
+                trigger.size = isFinish
+                    ? new Vector3(trackWidth + 14f, 8f, 28f)
+                    : new Vector3(trackWidth + 8f, 6f, 16f);
 
                 var checkpoint = cpGo.AddComponent<TrackCheckpoint>();
-                checkpoint.Configure(i, i == 0);
+                checkpoint.Configure(i, isFinish);
 
                 checkpointTransforms.Add(cpGo.transform);
             }
+        }
+
+        void AlignFinishCheckpoint(List<Vector3> centerline)
+        {
+            if (centerline.Count < 2 || checkpointTransforms.Count == 0)
+                return;
+
+            var finish = checkpointTransforms[0];
+            var start = centerline[0];
+            var next = centerline[1];
+            var forward = (next - start).normalized;
+            finish.SetPositionAndRotation(start + Vector3.up * 1f, Quaternion.LookRotation(forward, Vector3.up));
         }
 
         void CreateTrackSegment(string name, Vector3 a, Vector3 b, float width, float height, Material material,
@@ -247,6 +263,9 @@ namespace NeonLap.Track
 
             if (material != null)
                 go.GetComponent<Renderer>().sharedMaterial = material;
+
+            if (addCollider && tag == "Barrier")
+                ObstaclePhysics.ConfigureTrackBarrier(go);
 
             if (!addCollider)
             {

@@ -16,9 +16,16 @@ namespace NeonLap.Vehicle
         public float turnSpeedHigh = 45f;
 
         [Header("Grip")]
-        public float grip = 12f;
-        [Range(0f, 1f)] public float driftGripMultiplier = 0.4f;
-        public float driftRecovery = 6f;
+        public float grip = 10f;
+        [Range(0f, 1f)] public float driftGripMultiplier = 0.28f;
+        [Range(0f, 1f)] public float handbrakeGripMultiplier = 0.12f;
+        public float driftRecovery = 4.5f;
+        public float driftMinSpeed = 7f;
+        public float driftSteerMultiplier = 1.45f;
+        public float driftLateralPush = 14f;
+        public float driftForwardBoost = 6f;
+        public float powerSlideGrip = 0.62f;
+        public float driftSlipThreshold = 2.8f;
 
         [Header("Hover")]
         public float hoverHeight = 1.2f;

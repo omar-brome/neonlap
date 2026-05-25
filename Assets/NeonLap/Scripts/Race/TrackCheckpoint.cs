@@ -21,8 +21,34 @@ namespace NeonLap.Race
 
         void OnTriggerEnter(Collider other)
         {
+            TryPass(other);
+        }
+
+        void OnTriggerStay(Collider other)
+        {
+            if (!isFinishLine)
+                return;
+
+            TryPass(other);
+        }
+
+        void OnTriggerExit(Collider other)
+        {
+            if (!isFinishLine)
+                return;
+
             var racer = other.GetComponentInParent<RacerProgress>();
-            if (racer == null)
+            if (racer != null)
+                racer.CanTriggerFinish = true;
+        }
+
+        void TryPass(Collider other)
+        {
+            var racer = other.GetComponentInParent<RacerProgress>();
+            if (racer == null || racer.IsFinished)
+                return;
+
+            if (isFinishLine && !racer.CanTriggerFinish)
                 return;
 
             OnPassed?.Invoke(this, racer);

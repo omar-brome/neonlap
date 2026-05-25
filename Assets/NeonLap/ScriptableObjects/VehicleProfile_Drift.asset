@@ -16,11 +16,18 @@ MonoBehaviour:
   acceleration: 32
   brakeForce: 48
   reverseForce: 18
-  turnSpeedLow: 130
-  turnSpeedHigh: 50
-  grip: 10
-  driftGripMultiplier: 0.3
-  driftRecovery: 8
+  turnSpeedLow: 135
+  turnSpeedHigh: 58
+  grip: 9
+  driftGripMultiplier: 0.22
+  handbrakeGripMultiplier: 0.08
+  driftRecovery: 3.8
+  driftMinSpeed: 6
+  driftSteerMultiplier: 1.55
+  driftLateralPush: 16
+  driftForwardBoost: 7
+  powerSlideGrip: 0.55
+  driftSlipThreshold: 2.4
   hoverHeight: 1.2
   hoverForce: 80
   hoverDamping: 8

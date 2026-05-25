@@ -8,45 +8,46 @@ namespace NeonLap.Vehicle
     {
         Rigidbody rb;
         RaceManager raceManager;
+        bool subscribed;
 
         void Awake()
         {
             rb = GetComponent<Rigidbody>();
-            rb.isKinematic = true;
+            Freeze();
         }
 
-        void Start()
+        void OnEnable()
         {
-            raceManager = FindAnyObjectByType<RaceManager>();
-            if (raceManager == null)
-            {
-                rb.isKinematic = false;
-                return;
-            }
+            TrySubscribe();
+        }
 
-            raceManager.OnStateChanged += HandleRaceStateChanged;
-            ApplyGate(raceManager.State);
-
-            if (raceManager.State == RaceState.Countdown)
-                raceManager.OnCountdownTick += HandleCountdownTick;
+        void Update()
+        {
+            if (!subscribed)
+                TrySubscribe();
         }
 
         void OnDestroy()
         {
             if (raceManager != null)
-            {
                 raceManager.OnStateChanged -= HandleRaceStateChanged;
-                raceManager.OnCountdownTick -= HandleCountdownTick;
-            }
         }
 
-        void HandleCountdownTick(int value)
+        void TrySubscribe()
         {
-            if (value != 0)
+            if (subscribed)
                 return;
 
-            rb.isKinematic = false;
-            raceManager.OnCountdownTick -= HandleCountdownTick;
+            raceManager = FindAnyObjectByType<RaceManager>();
+            if (raceManager == null)
+            {
+                Freeze();
+                return;
+            }
+
+            raceManager.OnStateChanged += HandleRaceStateChanged;
+            subscribed = true;
+            ApplyGate(raceManager.State);
         }
 
         void HandleRaceStateChanged(RaceState state)
@@ -56,21 +57,30 @@ namespace NeonLap.Vehicle
 
         void ApplyGate(RaceState state)
         {
-            var allowDriving = state == RaceState.Racing || state == RaceState.Finished;
+            if (state == RaceState.Racing || state == RaceState.Finished)
+                Release();
+            else
+                Freeze();
+        }
 
-            if (!allowDriving)
-            {
-                if (!rb.isKinematic)
-                {
-                    rb.linearVelocity = Vector3.zero;
-                    rb.angularVelocity = Vector3.zero;
-                }
-
-                rb.isKinematic = true;
+        void Freeze()
+        {
+            if (rb == null)
                 return;
+
+            if (!rb.isKinematic)
+            {
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
             }
 
-            rb.isKinematic = false;
+            rb.isKinematic = true;
+        }
+
+        void Release()
+        {
+            if (rb != null)
+                rb.isKinematic = false;
         }
     }
 }

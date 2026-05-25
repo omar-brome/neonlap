@@ -14,6 +14,9 @@ namespace NeonLap.Input
         InputAction driftAction;
         InputAction resetAction;
         InputAction pauseAction;
+        InputAction switchCameraAction;
+        InputAction barrelRollAction;
+        InputAction lookBackAction;
         bool initialized;
 
         public float Accelerate { get; private set; }
@@ -22,6 +25,10 @@ namespace NeonLap.Input
         public bool DriftHeld { get; private set; }
         public bool ResetPressed { get; private set; }
         public bool PausePressed { get; private set; }
+        public bool SwitchCameraPressed { get; private set; }
+        public bool CelebrationJumpPressed { get; private set; }
+        public bool BarrelRollPressed { get; private set; }
+        public bool LookBackHeld { get; private set; }
 
         public void Configure(InputActionAsset actions)
         {
@@ -46,6 +53,9 @@ namespace NeonLap.Input
             driftAction = racingMap.FindAction("Drift", true);
             resetAction = racingMap.FindAction("Reset", true);
             pauseAction = racingMap.FindAction("Pause", true);
+            switchCameraAction = racingMap.FindAction("SwitchCamera", false);
+            barrelRollAction = racingMap.FindAction("BarrelRoll", false);
+            lookBackAction = racingMap.FindAction("LookBack", false);
             initialized = true;
         }
 
@@ -70,6 +80,10 @@ namespace NeonLap.Input
             DriftHeld = driftAction.IsPressed();
             ResetPressed = resetAction.WasPressedThisFrame();
             PausePressed = pauseAction.WasPressedThisFrame();
+            SwitchCameraPressed = switchCameraAction != null && switchCameraAction.WasPressedThisFrame();
+            CelebrationJumpPressed = driftAction.WasPressedThisFrame();
+            BarrelRollPressed = barrelRollAction != null && barrelRollAction.WasPressedThisFrame();
+            LookBackHeld = lookBackAction != null && lookBackAction.IsPressed();
         }
     }
 }

@@ -17,7 +17,7 @@ namespace NeonLap.Race
 
     public class RaceManager : MonoBehaviour
     {
-        [SerializeField] int totalLaps = 3;
+        [SerializeField] int totalLaps = 1;
         [SerializeField] float countdownInterval = 1f;
         [SerializeField] OvalTrackBuilder trackBuilder;
         [SerializeField] VehicleReset playerReset;
@@ -38,6 +38,7 @@ namespace NeonLap.Race
         public int TotalLaps => totalLaps;
         public int PlayerFinishPosition => playerFinishPosition;
         public int TotalRacers => racers.Count;
+        public IReadOnlyList<RacerProgress> Racers => racers;
         public float RaceTime => State == RaceState.Racing || State == RaceState.Finished
             ? Time.time - raceStartTime
             : 0f;
@@ -79,6 +80,7 @@ namespace NeonLap.Race
 
         IEnumerator BeginRaceCountdown()
         {
+            FreezeAllRacersAtGrid();
             SetState(RaceState.Countdown);
             countdownValue = 3;
             playerFinishPosition = 0;
@@ -86,7 +88,15 @@ namespace NeonLap.Race
 
             var firstCheckpoint = checkpoints.Count > 1 ? 1 : 0;
             foreach (var racer in racers)
+            {
+                if (!racer.IsPlayer)
+                {
+                    var reset = racer.GetComponent<VehicleReset>();
+                    reset?.RestoreForRaceRestart();
+                }
+
                 racer.ResetProgress(firstCheckpoint);
+            }
 
             while (countdownValue > 0)
             {
@@ -105,11 +115,17 @@ namespace NeonLap.Race
 
         void HandleCheckpointPassed(TrackCheckpoint checkpoint, RacerProgress racer)
         {
-            if (State != RaceState.Racing || racer == null)
+            if (State != RaceState.Racing || racer == null || racer.IsFinished || racer.IsEliminated)
                 return;
 
             if (checkpoint.Index != racer.NextCheckpointIndex)
                 return;
+
+            if (checkpoint.IsFinishLine && racer.CurrentLap >= totalLaps)
+            {
+                CompleteRacer(racer);
+                return;
+            }
 
             if (racer.IsPlayer && playerReset != null)
                 playerReset.SetRespawnPoint(checkpoint.transform);
@@ -127,24 +143,73 @@ namespace NeonLap.Race
                 OnLapCompleted?.Invoke(racer.CurrentLap);
             }
 
-            if (racer.CurrentLap >= totalLaps)
-            {
-                racer.MarkFinished(RaceTime);
-                if (racer.IsPlayer)
-                    FinishPlayerRace();
-                return;
-            }
-
+            racer.CanTriggerFinish = false;
             racer.AdvanceLap(checkpoints.Count > 1 ? 1 : 0);
             if (racer.IsPlayer)
                 lapStartTime = Time.time;
         }
 
+        void CompleteRacer(RacerProgress racer)
+        {
+            if (racer.IsFinished)
+                return;
+
+            if (racer.IsPlayer)
+            {
+                lastLapTime = Time.time - lapStartTime;
+                if (lastLapTime < bestLapTime)
+                    bestLapTime = lastLapTime;
+                OnLapCompleted?.Invoke(racer.CurrentLap);
+            }
+
+            racer.MarkFinished(RaceTime);
+            racer.CanTriggerFinish = false;
+
+            if (racer.IsPlayer)
+                FinishPlayerRace();
+        }
+
         void FinishPlayerRace()
         {
             playerFinishPosition = GetPlayerPosition();
+            if (playerRacer != null)
+                playerRacer.GetComponent<RaceScoreSystem>()?.ApplyFinishBonus(playerFinishPosition);
+
             SetState(RaceState.Finished);
             OnRaceFinished?.Invoke(playerFinishPosition);
+        }
+
+        void FreezeAllRacersAtGrid()
+        {
+            foreach (var racer in racers)
+            {
+                if (racer == null)
+                    continue;
+
+                var rb = racer.GetComponent<Rigidbody>();
+                if (rb == null)
+                    continue;
+
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+                rb.isKinematic = true;
+            }
+        }
+
+        public float GetPlayerRaceProgress()
+        {
+            if (playerRacer == null || checkpoints.Count == 0)
+                return 0f;
+
+            if (playerRacer.IsFinished)
+                return 1f;
+
+            var checkpointCount = Mathf.Max(checkpoints.Count, 1);
+            var firstCheckpoint = checkpointCount > 1 ? 1 : 0;
+            var completed = (playerRacer.CurrentLap - 1) * checkpointCount +
+                            Mathf.Max(playerRacer.NextCheckpointIndex - firstCheckpoint, 0);
+            var total = Mathf.Max(totalLaps * checkpointCount, 1);
+            return Mathf.Clamp01((float)completed / total);
         }
 
         public int GetPlayerPosition()
@@ -153,6 +218,22 @@ namespace NeonLap.Race
                 return 1;
 
             return CalculatePlacement(playerRacer);
+        }
+
+        public List<RacerProgress> GetRankedRacers()
+        {
+            var ranked = new List<RacerProgress>(racers);
+            ranked.Sort(CompareRacerStandings);
+            return ranked;
+        }
+
+        int CompareRacerStandings(RacerProgress a, RacerProgress b)
+        {
+            if (IsRacerAhead(a, b))
+                return -1;
+            if (IsRacerAhead(b, a))
+                return 1;
+            return 0;
         }
 
         int CalculatePlacement(RacerProgress player)
@@ -172,6 +253,11 @@ namespace NeonLap.Race
 
         static bool IsRacerAhead(RacerProgress a, RacerProgress b)
         {
+            if (a.IsEliminated && !b.IsEliminated)
+                return false;
+            if (!a.IsEliminated && b.IsEliminated)
+                return true;
+
             if (a.IsFinished && b.IsFinished)
                 return a.FinishTime < b.FinishTime;
             if (a.IsFinished)

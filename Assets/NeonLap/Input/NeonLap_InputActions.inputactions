@@ -58,6 +58,33 @@
                     "processors": "",
                     "interactions": "",
                     "initialStateCheck": false
+                },
+                {
+                    "name": "SwitchCamera",
+                    "type": "Button",
+                    "id": "77777777-7777-7777-7777-777777777777",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
+                    "name": "BarrelRoll",
+                    "type": "Button",
+                    "id": "88888888-8888-8888-8888-888888888888",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
+                    "name": "LookBack",
+                    "type": "Button",
+                    "id": "99999999-9999-9999-9999-999999999999",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
                 }
             ],
             "bindings": [
@@ -267,6 +294,94 @@
                     "processors": "",
                     "groups": "Gamepad",
                     "action": "Pause",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "gggg1111-gggg-1111-gggg-111111111111",
+                    "path": "<Keyboard>/c",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "SwitchCamera",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "gggg2222-gggg-2222-gggg-222222222222",
+                    "path": "<Gamepad>/buttonWest",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Gamepad",
+                    "action": "SwitchCamera",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "hhhh1111-hhhh-1111-hhhh-111111111111",
+                    "path": "<Keyboard>/downArrow",
+                    "interactions": "MultiTap(tapTime=0.35,tapCount=2)",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "BarrelRoll",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "hhhh2222-hhhh-2222-hhhh-222222222222",
+                    "path": "<Keyboard>/s",
+                    "interactions": "MultiTap(tapTime=0.35,tapCount=2)",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "BarrelRoll",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "hhhh3333-hhhh-3333-hhhh-333333333333",
+                    "path": "<Gamepad>/dpad/down",
+                    "interactions": "MultiTap(tapTime=0.35,tapCount=2)",
+                    "processors": "",
+                    "groups": "Gamepad",
+                    "action": "BarrelRoll",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "iiii1111-iiii-1111-iiii-111111111111",
+                    "path": "<Keyboard>/leftShift",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "LookBack",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "iiii2222-iiii-2222-iiii-222222222222",
+                    "path": "<Keyboard>/rightShift",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "LookBack",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "iiii3333-iiii-3333-iiii-333333333333",
+                    "path": "<Gamepad>/leftShoulder",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Gamepad",
+                    "action": "LookBack",
                     "isComposite": false,
                     "isPartOfComposite": false
                 }

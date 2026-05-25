@@ -14,8 +14,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   trackName: Oval Circuit
   sceneName: SampleScene
-  lapCount: 3
+  layout: 0
+  lapCount: 1
   checkpointCount: 10
   straightLength: 80
   turnRadius: 25
-  trackWidth: 14
+  trackWidth: 26

@@ -3,31 +3,36 @@ using UnityEngine;
 
 namespace NeonLap.VFX
 {
-  public class DriftTrailVFX : MonoBehaviour
-  {
-    [SerializeField] VehicleController vehicle;
-    [SerializeField] TrailRenderer leftTrail;
-    [SerializeField] TrailRenderer rightTrail;
-
-    void Awake()
+    public class DriftTrailVFX : MonoBehaviour
     {
-      if (vehicle == null)
-        vehicle = GetComponentInParent<VehicleController>();
-    }
+        [SerializeField] VehicleController vehicle;
+        [SerializeField] TrailRenderer leftTrail;
+        [SerializeField] TrailRenderer rightTrail;
+        [SerializeField] float lateralSlipThreshold = 2.4f;
 
-    void Update()
-    {
-      var drifting = vehicle != null && vehicle.IsDrifting;
-      SetTrail(leftTrail, drifting);
-      SetTrail(rightTrail, drifting);
-    }
+        void Awake()
+        {
+            if (vehicle == null)
+                vehicle = GetComponentInParent<VehicleController>();
+        }
 
-    static void SetTrail(TrailRenderer trail, bool emit)
-    {
-      if (trail == null)
-        return;
+        void Update()
+        {
+            if (vehicle == null)
+                return;
 
-      trail.emitting = emit;
+            var drifting = vehicle.IsDrifting || vehicle.LateralSpeed >= lateralSlipThreshold ||
+                           (vehicle.GetComponent<VehicleSlipEffect>()?.IsSlipping ?? false);
+            SetTrail(leftTrail, drifting);
+            SetTrail(rightTrail, drifting);
+        }
+
+        static void SetTrail(TrailRenderer trail, bool emit)
+        {
+            if (trail == null)
+                return;
+
+            trail.emitting = emit;
+        }
     }
-  }
 }

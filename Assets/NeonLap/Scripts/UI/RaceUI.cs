@@ -1,4 +1,5 @@
 using NeonLap.Race;
+using NeonLap.Vehicle;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -7,11 +8,15 @@ namespace NeonLap.UI
     public class RaceUI : MonoBehaviour
     {
         [SerializeField] RaceManager raceManager;
+        [SerializeField] VehicleController playerVehicle;
         [SerializeField] Text lapText;
         [SerializeField] Text lapTimerText;
         [SerializeField] Text raceTimerText;
         [SerializeField] Text bestLapText;
         [SerializeField] Text positionText;
+        [SerializeField] Text scoreText;
+        [SerializeField] RaceScoreSystem scoreSystem;
+        [SerializeField] VehicleDashboardCluster dashboardCluster;
         [SerializeField] Text countdownText;
         [SerializeField] Text countdownSubtitleText;
         [SerializeField] GameObject countdownPanel;
@@ -23,11 +28,15 @@ namespace NeonLap.UI
 
         public void Configure(
             RaceManager manager,
+            VehicleController player,
             Text lap,
             Text lapTimer,
             Text raceTimer,
             Text bestLap,
             Text position,
+            Text score,
+            RaceScoreSystem scoring,
+            VehicleDashboardCluster dashboard,
             Text countdown,
             Text countdownSubtitle,
             GameObject countdownPanelObject,
@@ -37,11 +46,15 @@ namespace NeonLap.UI
         {
             Unsubscribe();
             raceManager = manager;
+            playerVehicle = player;
             lapText = lap;
             lapTimerText = lapTimer;
             raceTimerText = raceTimer;
             bestLapText = bestLap;
             positionText = position;
+            scoreText = score;
+            scoreSystem = scoring;
+            dashboardCluster = dashboard;
             countdownText = countdown;
             countdownSubtitleText = countdownSubtitle;
             countdownPanel = countdownPanelObject;
@@ -143,6 +156,35 @@ namespace NeonLap.UI
             {
                 positionText.text = string.Empty;
             }
+
+            UpdateScoreDisplay();
+            UpdateDashboardVisibility();
+        }
+
+        void UpdateScoreDisplay()
+        {
+            if (scoreText == null || scoreSystem == null)
+                return;
+
+            if (raceManager.State != RaceState.Racing && raceManager.State != RaceState.Finished)
+            {
+                scoreText.text = string.Empty;
+                return;
+            }
+
+            scoreText.text = $"Score {scoreSystem.Score:N0}";
+            scoreText.color = scoreSystem.Score >= 1000
+                ? new Color(1f, 0.92f, 0.35f)
+                : new Color(0.45f, 1f, 1f);
+        }
+
+        void UpdateDashboardVisibility()
+        {
+            if (dashboardCluster == null || raceManager == null)
+                return;
+
+            var visible = raceManager.State == RaceState.Racing || raceManager.State == RaceState.Finished;
+            dashboardCluster.SetVisible(visible);
         }
 
         void HandleCountdownTick(int value)
@@ -196,19 +238,55 @@ namespace NeonLap.UI
             if (countdownPanel != null)
                 countdownPanel.SetActive(false);
 
-            if (finishPanel != null)
-                finishPanel.SetActive(true);
-
             if (finishTitleText != null)
                 finishTitleText.text = placement == 1 ? "YOU WON!" : "RACE FINISHED";
 
             if (finishDetailText != null)
             {
+                var levelLabel = string.Empty;
+                if (Core.GameManager.Instance != null)
+                {
+                    var track = Core.GameManager.Instance.GetCurrentTrackDefinition();
+                    if (track != null)
+                        levelLabel = $"{track.trackName}  •  ";
+                }
+
+                var scoreLabel = scoreSystem != null ? $"Score {scoreSystem.Score:N0}  •  " : string.Empty;
+
                 if (placement == 1)
-                    finishDetailText.text = $"Time {FormatTime(raceManager.RaceTime)}";
+                {
+                    finishDetailText.text = $"{levelLabel}{scoreLabel}Time {FormatTime(raceManager.RaceTime)}";
+                    if (Core.GameManager.Instance != null && !Core.GameManager.Instance.HasNextLevel)
+                        finishDetailText.text += "  •  ALL LEVELS COMPLETE!";
+                }
                 else
-                    finishDetailText.text = $"{GetPlacementLabel(placement)} Place  •  {FormatTime(raceManager.RaceTime)}";
+                    finishDetailText.text =
+                        $"{levelLabel}{scoreLabel}{GetPlacementLabel(placement)} Place  •  {FormatTime(raceManager.RaceTime)}";
             }
+        }
+
+        public void ShowFinishPanel()
+        {
+            if (finishPanel != null)
+                finishPanel.SetActive(true);
+        }
+
+        public void SetGameplayHudVisible(bool visible)
+        {
+            SetTextVisible(lapText, visible);
+            SetTextVisible(lapTimerText, visible);
+            SetTextVisible(raceTimerText, visible);
+            SetTextVisible(bestLapText, visible);
+            SetTextVisible(positionText, visible);
+            SetTextVisible(scoreText, visible);
+            if (dashboardCluster != null)
+                dashboardCluster.SetVisible(visible);
+        }
+
+        static void SetTextVisible(Text text, bool visible)
+        {
+            if (text != null)
+                text.gameObject.SetActive(visible);
         }
 
         static string GetPlacementLabel(int placement)

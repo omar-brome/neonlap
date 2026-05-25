@@ -474,7 +474,7 @@ MonoBehaviour:
   trackEdgeMaterial: {fileID: 2100000, guid: bbccddee2233445566778899aabbccdd, type: 2}
   carBodyMaterial: {fileID: 2100000, guid: ddee0000112233445566778899aabbcc, type: 2}
   carAccentMaterial: {fileID: 2100000, guid: ccddeeff33445566778899aabbccddee, type: 2}
-  spawnAiRival: 1
+  spawnAiRivals: 1
   createUi: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:

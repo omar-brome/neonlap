@@ -13,17 +13,18 @@ namespace NeonLap.VFX
 
         Rigidbody rb;
         ParticleSystem smoke;
-        ParticleSystem.EmissionModule emission;
-        ParticleSystem.MainModule mainModule;
         float lastForwardSpeed;
 
         void Awake()
         {
             rb = GetComponent<Rigidbody>();
             smoke = CreateSmokeSystem(transform, localEmitPosition);
-            mainModule = smoke.main;
-            emission = smoke.emission;
-            emission.rateOverTime = 0f;
+            SetEmissionRate(0f);
+        }
+
+        void OnDisable()
+        {
+            SetEmissionRate(0f);
         }
 
         void Update()
@@ -33,7 +34,7 @@ namespace NeonLap.VFX
 
             if (rb.isKinematic)
             {
-                emission.rateOverTime = 0f;
+                SetEmissionRate(0f);
                 return;
             }
 
@@ -44,7 +45,7 @@ namespace NeonLap.VFX
 
             if (forwardSpeed < minForwardSpeed * 0.5f)
             {
-                emission.rateOverTime = 0f;
+                SetEmissionRate(0f);
                 return;
             }
 
@@ -52,8 +53,19 @@ namespace NeonLap.VFX
             if (accelerating)
                 baseRate *= 1.45f;
 
-            emission.rateOverTime = baseRate;
+            SetEmissionRate(baseRate);
+
+            var mainModule = smoke.main;
             mainModule.startSpeed = Mathf.Lerp(0.6f, 2.4f, speedRatio);
+        }
+
+        void SetEmissionRate(float rate)
+        {
+            if (smoke == null)
+                return;
+
+            var emission = smoke.emission;
+            emission.rateOverTime = rate;
         }
 
         static ParticleSystem CreateSmokeSystem(Transform carRoot, Vector3 localPosition)
@@ -92,11 +104,8 @@ namespace NeonLap.VFX
             shape.arc = 360f;
 
             var velocityOverLifetime = ps.velocityOverLifetime;
-            velocityOverLifetime.enabled = true;
             velocityOverLifetime.space = ParticleSystemSimulationSpace.World;
-            velocityOverLifetime.y = new ParticleSystem.MinMaxCurve(0.4f, 1.2f);
-            velocityOverLifetime.x = new ParticleSystem.MinMaxCurve(-0.35f, 0.35f);
-            velocityOverLifetime.z = new ParticleSystem.MinMaxCurve(-0.25f, 0.15f);
+            ParticleVelocityUtility.ConfigureRandomAxes(velocityOverLifetime, -0.35f, 0.35f, 0.4f, 1.2f, -0.25f, 0.15f);
 
             var limitVelocity = ps.limitVelocityOverLifetime;
             limitVelocity.enabled = true;
