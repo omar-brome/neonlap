@@ -1,3 +1,4 @@
+using NeonLap.Vehicle;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -13,6 +14,12 @@ namespace NeonLap.Environment
         public static void Attach(GameObject obstacle)
         {
             if (obstacle == null || obstacle.transform.Find(MarkerChildName) != null)
+                return;
+
+            if (obstacle.GetComponentInChildren<PoliceChaseVehicle>() != null)
+                return;
+
+            if (ShouldSkipMarker(obstacle))
                 return;
 
             var collider = obstacle.GetComponent<Collider>();
@@ -34,6 +41,23 @@ namespace NeonLap.Environment
             renderer.sharedMaterial = markerMaterial;
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
+        }
+
+        static bool ShouldSkipMarker(GameObject obstacle)
+        {
+            if (obstacle.CompareTag("Barrier"))
+                return true;
+
+            if (obstacle.name.StartsWith("Barrier"))
+                return true;
+
+            var collider = obstacle.GetComponent<Collider>();
+            if (collider == null)
+                return false;
+
+            var size = collider.bounds.size;
+            var footprint = Mathf.Max(size.x, size.z);
+            return footprint > 6f || size.y > 4f;
         }
 
         static float GetMarkerScale(Collider collider)

@@ -1,4 +1,6 @@
+using NeonLap.Core;
 using NeonLap.Race;
+using NeonLap.Services.Platform;
 using NeonLap.Track;
 using UnityEngine;
 using UnityEngine.UI;
@@ -11,8 +13,10 @@ namespace NeonLap.UI
         [SerializeField] GameObject finishPanel;
         [SerializeField] Button mainMenuButton;
         [SerializeField] Button restartButton;
+        [SerializeField] Text restartLabel;
         [SerializeField] Button nextLevelButton;
         [SerializeField] Text nextLevelLabel;
+        [SerializeField] Button itchExportButton;
 
         bool subscribed;
 
@@ -22,13 +26,15 @@ namespace NeonLap.UI
             Button mainMenu,
             Button restart,
             Button nextLevel,
-            Text nextLevelText)
+            Text nextLevelText,
+            Text restartText = null)
         {
             Unsubscribe();
             raceManager = manager;
             finishPanel = panel;
             mainMenuButton = mainMenu;
             restartButton = restart;
+            restartLabel = restartText ?? restart?.GetComponentInChildren<Text>();
             nextLevelButton = nextLevel;
             nextLevelLabel = nextLevelText;
             WireButtons();
@@ -86,8 +92,52 @@ namespace NeonLap.UI
             subscribed = false;
         }
 
+        public void ConfigureItchExportButton(Button exportButton)
+        {
+            itchExportButton = exportButton;
+            if (itchExportButton == null)
+                return;
+
+            itchExportButton.onClick.RemoveListener(CopyItchLeaderboardLine);
+            itchExportButton.onClick.AddListener(CopyItchLeaderboardLine);
+            itchExportButton.gameObject.SetActive(GameRaceModeSettings.IsTimeTrial);
+        }
+
+        public void ConfigureTimeTrialFinish(bool canAdvanceNext)
+        {
+            if (restartLabel != null)
+                restartLabel.text = "RETRY";
+
+            if (itchExportButton != null)
+                itchExportButton.gameObject.SetActive(GameRaceModeSettings.IsTimeTrial);
+
+            if (nextLevelButton == null)
+                return;
+
+            nextLevelButton.gameObject.SetActive(canAdvanceNext);
+            if (!canAdvanceNext || nextLevelLabel == null)
+                return;
+
+            var manager = Core.GameManager.Instance;
+            var nextTrack = manager != null ? manager.GetTrackDefinition(manager.CurrentLevelIndex + 1) : null;
+            nextLevelLabel.text = nextTrack != null
+                ? $"NEXT: {nextTrack.trackName.ToUpper()}"
+                : "NEXT TRACK";
+        }
+
         void HandleRaceFinished(int placement)
         {
+            if (!Core.GameRaceModeSettings.IsCareer)
+            {
+                if (!Core.GameRaceModeSettings.IsTimeTrial && !Core.GameRaceModeSettings.IsGhostDuel)
+                {
+                    if (nextLevelButton != null)
+                        nextLevelButton.gameObject.SetActive(false);
+                }
+
+                return;
+            }
+
             var manager = Core.GameManager.Instance;
             var canAdvance = placement == 1 && manager != null && manager.HasNextLevel;
 
@@ -134,6 +184,12 @@ namespace NeonLap.UI
         {
             if (Core.GameManager.Instance != null)
                 Core.GameManager.Instance.LoadNextLevel();
+        }
+
+        void CopyItchLeaderboardLine()
+        {
+            var trackIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+            ItchIoHonorLeaderboardExporter.TryCopyTrackLineToClipboard(trackIndex);
         }
     }
 }

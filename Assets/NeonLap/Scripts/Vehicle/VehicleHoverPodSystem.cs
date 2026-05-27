@@ -280,8 +280,14 @@ namespace NeonLap.Vehicle
         {
             for (var i = spawnedDebris.Count - 1; i >= 0; i--)
             {
-                if (spawnedDebris[i] != null)
-                    Destroy(spawnedDebris[i]);
+                var debris = spawnedDebris[i];
+                if (debris == null)
+                    continue;
+
+                if (debris.GetComponent<VehicleDamageDebris>() != null && VehicleDamageDebrisPool.Instance != null)
+                    VehicleDamageDebrisPool.Instance.Release(debris);
+                else
+                    Destroy(debris);
             }
 
             spawnedDebris.Clear();

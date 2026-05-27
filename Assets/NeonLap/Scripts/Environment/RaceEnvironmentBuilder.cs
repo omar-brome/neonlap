@@ -1,7 +1,10 @@
 using System.Collections.Generic;
+using NeonLap.Audio;
 using NeonLap.Core;
 using NeonLap.Race;
+using NeonLap.Rendering;
 using NeonLap.Track;
+using NeonLap.Vehicle;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -42,54 +45,111 @@ namespace NeonLap.Environment
         };
 
         Transform environmentRoot;
+        Transform jumbotronRoot;
         StadiumScoreboard scoreboard;
+        StadiumPaSpeaker paSpeaker;
+        CrowdReactionController crowdReaction;
         Text jumbotronTitle;
         Text jumbotronPosition;
         Text jumbotronLap;
         Text jumbotronTimer;
         Text jumbotronStatus;
+        Text jumbotronLeaderHeader;
+        Text jumbotronLeader1;
+        Text jumbotronLeader2;
+        Text jumbotronLeader3;
+        Text jumbotronFastestLap;
+        Text jumbotronIncident1;
+        Text jumbotronIncident2;
+        Text jumbotronIncident3;
+        Text jumbotronIncident4;
         EnvMaterials materials;
+        TrackThemeProfile themeProfile;
 
         float crowdDensity = 1f;
         float environmentDensity = 1f;
 
+        IReadOnlyList<Vector3> trackCenterline;
+
         public void Build(TrackDefinition definition, Vector3 startPosition, Quaternion startRotation,
-            Vector2 environmentHalfExtents, QualityPreset qualityPreset)
+            Vector2 environmentHalfExtents, QualityPreset qualityPreset,
+            IReadOnlyList<Vector3> centerline = null)
         {
+            trackCenterline = centerline;
             if (environmentRoot != null)
                 Destroy(environmentRoot.gameObject);
 
             environmentRoot = new GameObject("EnvironmentRoot").transform;
             environmentRoot.SetParent(transform, false);
+            crowdReaction = environmentRoot.gameObject.AddComponent<CrowdReactionController>();
 
-            crowdDensity = Mathf.Clamp(qualityPreset.CrowdDensity, 0.2f, 1f);
-            environmentDensity = Mathf.Clamp(qualityPreset.EnvironmentDensity, 0.2f, 1f);
+            if (GameQualitySettings.UseGpuInstancing)
+                InstancedPropRenderer.Ensure(environmentRoot);
+
+            crowdDensity = Mathf.Clamp(qualityPreset.CrowdDensity, 0.55f, 1f);
+            environmentDensity = Mathf.Clamp(qualityPreset.EnvironmentDensity, 0.5f, 1f);
 
             var trackWidth = definition != null ? definition.trackWidth : 26f;
-            var half = environmentHalfExtents.x;
-            var turnRadius = environmentHalfExtents.y;
+            var half = Mathf.Min(environmentHalfExtents.x, 108f);
+            var turnRadius = Mathf.Min(environmentHalfExtents.y, 88f);
+            var groundHalf = environmentHalfExtents.x;
+            var groundTurnRadius = environmentHalfExtents.y;
 
-            materials = CreateMaterials();
-            BuildGroundPlane(half, turnRadius);
-            BuildCitySkyline(half, turnRadius);
-            BuildTrees(half, turnRadius, trackWidth);
-            BuildStadium(half, turnRadius, trackWidth);
+            themeProfile = TrackThemeProfile.ForDefinition(definition);
+            materials = CreateMaterials(themeProfile);
+            BuildGroundPlane(groundHalf, groundTurnRadius);
+            BuildThemeBackdrop(half, turnRadius, trackWidth);
+            BuildStadium(half, turnRadius, trackWidth, definition);
             BuildJumbotron(startPosition, startRotation, trackWidth);
-            BuildStadiumLightingSystem(half, turnRadius, trackWidth);
+            if (definition != null && TrackLayoutUtility.IsZigZagLayout(definition.layout))
+                BuildMinimalTrackLighting(lightingRoot: null, trackWidth);
+            else
+                BuildStadiumLightingSystem(half, turnRadius, trackWidth);
         }
 
-        public void ConfigureScoreboard(RaceManager raceManager)
+        void BuildMinimalTrackLighting(Transform lightingRoot, float trackWidth)
         {
-            scoreboard?.Configure(raceManager, jumbotronTitle, jumbotronPosition, jumbotronLap, jumbotronTimer,
-                jumbotronStatus);
+            var root = lightingRoot != null
+                ? lightingRoot
+                : CreateEmpty("StadiumLighting", environmentRoot);
+            AddStadiumFillLight(root, new Vector3(0f, 34f, 0f), new Color(0.7f, 0.82f, 1f), 2.8f, 120f);
+            AddStadiumFillLight(root, new Vector3(0f, 18f, trackWidth * 1.5f), new Color(0.85f, 0.92f, 1f), 1.4f, 70f);
+            AddStadiumFillLight(root, new Vector3(0f, 18f, -trackWidth * 1.5f), new Color(0.85f, 0.92f, 1f), 1.4f, 70f);
         }
 
-        EnvMaterials CreateMaterials()
+        public void ConfigureScoreboard(RaceManager raceManager, PoliceChaseSystem policeChase = null)
+        {
+            paSpeaker = jumbotronRoot != null
+                ? StadiumPaSpeaker.Setup(jumbotronRoot, raceManager)
+                : null;
+
+            scoreboard?.Configure(
+                raceManager,
+                jumbotronTitle,
+                jumbotronPosition,
+                jumbotronLap,
+                jumbotronTimer,
+                jumbotronStatus,
+                jumbotronLeaderHeader,
+                jumbotronLeader1,
+                jumbotronLeader2,
+                jumbotronLeader3,
+                jumbotronFastestLap,
+                jumbotronIncident1,
+                jumbotronIncident2,
+                jumbotronIncident3,
+                jumbotronIncident4,
+                policeChase,
+                paSpeaker);
+        }
+
+        EnvMaterials CreateMaterials(TrackThemeProfile profile)
         {
             var lit = Shader.Find("Universal Render Pipeline/Lit");
             Material Make(Color baseColor, Color emission, float smoothness = 0.4f, float emissionIntensity = 0f)
             {
                 var mat = new Material(lit);
+                mat.enableInstancing = true;
                 mat.SetColor("_BaseColor", baseColor);
                 if (emissionIntensity > 0f)
                 {
@@ -115,58 +175,91 @@ namespace NeonLap.Environment
 
             return new EnvMaterials
             {
-                Ground = Make(new Color(0.03f, 0.05f, 0.08f), Color.black, 0.15f),
-                Stadium = Make(new Color(0.08f, 0.1f, 0.16f), new Color(0.1f, 0.3f, 0.45f), 0.35f, 0.15f),
-                Building = Make(new Color(0.06f, 0.07f, 0.12f), new Color(0.15f, 0.2f, 0.35f), 0.55f, 0.25f),
-                BuildingAccent = Make(new Color(0.05f, 0.12f, 0.18f), new Color(0.2f, 0.8f, 1f), 0.75f, 1.8f),
-                Foliage = Make(new Color(0.05f, 0.22f, 0.14f), new Color(0.1f, 0.8f, 0.35f), 0.25f, 0.6f),
-                Trunk = Make(new Color(0.12f, 0.08f, 0.06f), Color.black, 0.1f),
+                Ground = Make(profile.GroundColor, Color.black, 0.15f),
+                Stadium = Make(profile.StadiumColor, profile.BuildingAccentColor, 0.35f, 0.15f),
+                Building = Make(profile.BuildingColor, profile.BuildingAccentColor * 0.35f, 0.55f, 0.25f),
+                BuildingAccent = Make(profile.BuildingAccentColor * 0.35f, profile.BuildingAccentColor,
+                    0.75f, profile.BuildingAccentEmission),
+                Foliage = Make(profile.FoliageColor, profile.FoliageEmission, 0.25f, 0.6f),
+                Trunk = Make(profile.TrunkColor, Color.black, 0.1f),
                 Screen = Make(new Color(0.02f, 0.04f, 0.08f), new Color(0.1f, 0.4f, 0.55f), 0.85f, 0.35f),
-                ScreenGlow = Make(new Color(0.05f, 0.15f, 0.2f), new Color(0.3f, 1f, 1f), 0.9f, 2.5f),
+                ScreenGlow = Make(profile.ScreenGlowColor * 0.2f, profile.ScreenGlowColor, 0.9f, 2.5f),
                 SignBoard = Make(new Color(0.95f, 0.92f, 0.2f), new Color(1f, 0.85f, 0.15f), 0.35f, 0.8f),
-                LightTower = Make(new Color(0.12f, 0.14f, 0.2f), new Color(0.15f, 0.35f, 0.5f), 0.55f, 0.35f),
-                LampHead = Make(new Color(0.75f, 0.88f, 1f), new Color(0.6f, 0.95f, 1f), 0.92f, 3.5f),
+                LightTower = Make(new Color(0.12f, 0.14f, 0.2f), profile.BuildingAccentColor * 0.4f, 0.55f, 0.35f),
+                LampHead = Make(profile.LampHeadColor, profile.LampHeadColor, 0.92f, 3.5f),
                 Crowd = crowdColors
             };
         }
 
         void BuildGroundPlane(float half, float turnRadius)
         {
-            var ground = CreatePrimitive(PrimitiveType.Cube, "CityGround", environmentRoot,
+            var groundName = themeProfile.Theme switch
+            {
+                TrackTheme.DesertCanyon => "DesertGround",
+                TrackTheme.BeachBoardwalk => "SandGround",
+                TrackTheme.MountainPass => "AlpineGround",
+                TrackTheme.DockyardNight => "DockGround",
+                _ => "CityGround",
+            };
+            var ground = CreatePrimitive(PrimitiveType.Cube, groundName, environmentRoot,
                 Vector3.zero, new Vector3(half * 2f + 220f, 0.2f, turnRadius * 2f + 220f), materials.Ground);
             ground.transform.position = new Vector3(0f, -0.15f, 0f);
         }
 
-        void BuildStadium(float half, float turnRadius, float trackWidth)
+        void BuildThemeBackdrop(float half, float turnRadius, float trackWidth)
+        {
+            if (themeProfile.UseContainers)
+                BuildDockyardProps(half, turnRadius, trackWidth);
+            else if (themeProfile.BuildingDensity > 0.01f)
+                BuildCitySkyline(half, turnRadius, trackWidth, themeProfile.BuildingDensity);
+
+            if (themeProfile.RockDensity > 0.01f)
+                BuildRockFormations(half, turnRadius, trackWidth, themeProfile.RockDensity);
+
+            if (themeProfile.UsePalms)
+                BuildPalms(half, turnRadius, trackWidth, themeProfile.TreeDensity);
+            else if (themeProfile.TreeDensity > 0.01f)
+                BuildTrees(half, turnRadius, trackWidth, themeProfile.TreeDensity);
+        }
+
+        void BuildStadium(float half, float turnRadius, float trackWidth, TrackDefinition definition)
         {
             var stadiumRoot = CreateEmpty("Stadium", environmentRoot);
+            var compactLayout = definition != null && TrackLayoutUtility.IsZigZagLayout(definition.layout);
             var outerOffset = trackWidth * 0.5f + 10f;
             var standDepth = 18f;
             var standHeight = 14f;
+            var standSpan = Mathf.Min(half * 2f + 28f, compactLayout ? 150f : 220f);
+            var sideSpan = Mathf.Min(turnRadius * 2f + 20f, compactLayout ? 95f : 130f);
+            var tiers = compactLayout ? 4 : 6;
 
             BuildGrandstand(stadiumRoot, new Vector3(0f, standHeight * 0.5f, turnRadius + outerOffset + standDepth * 0.5f),
-                new Vector3(half * 2f + 28f, standHeight, standDepth), Quaternion.identity, 6, Vector3.back);
+                new Vector3(standSpan, standHeight, standDepth), Quaternion.identity, tiers, Vector3.back);
             BuildGrandstand(stadiumRoot, new Vector3(0f, standHeight * 0.5f, -(turnRadius + outerOffset + standDepth * 0.5f)),
-                new Vector3(half * 2f + 28f, standHeight, standDepth), Quaternion.identity, 6, Vector3.forward);
+                new Vector3(standSpan, standHeight, standDepth), Quaternion.identity, tiers, Vector3.forward);
             BuildGrandstand(stadiumRoot, new Vector3(half + outerOffset + standDepth * 0.5f, standHeight * 0.5f, 0f),
-                new Vector3(standDepth, standHeight, turnRadius * 2f + 20f), Quaternion.identity, 5, Vector3.left);
+                new Vector3(standDepth, standHeight, sideSpan), Quaternion.identity, Mathf.Min(tiers, 5), Vector3.left);
             BuildGrandstand(stadiumRoot, new Vector3(-(half + outerOffset + standDepth * 0.5f), standHeight * 0.5f, 0f),
-                new Vector3(standDepth, standHeight, turnRadius * 2f + 20f), Quaternion.identity, 5, Vector3.right);
+                new Vector3(standDepth, standHeight, sideSpan), Quaternion.identity, Mathf.Min(tiers, 5), Vector3.right);
 
-            BuildCornerCrowd(stadiumRoot, new Vector3(half + outerOffset * 0.35f, standHeight * 0.45f, turnRadius + outerOffset * 0.35f),
-                new Vector3(12f, standHeight * 0.9f, 12f), Vector3.back);
-            BuildCornerCrowd(stadiumRoot, new Vector3(-half - outerOffset * 0.35f, standHeight * 0.45f, turnRadius + outerOffset * 0.35f),
-                new Vector3(12f, standHeight * 0.9f, 12f), Vector3.back);
-            BuildCornerCrowd(stadiumRoot, new Vector3(half + outerOffset * 0.35f, standHeight * 0.45f, -(turnRadius + outerOffset * 0.35f)),
-                new Vector3(12f, standHeight * 0.9f, 12f), Vector3.forward);
-            BuildCornerCrowd(stadiumRoot, new Vector3(-half - outerOffset * 0.35f, standHeight * 0.45f, -(turnRadius + outerOffset * 0.35f)),
-                new Vector3(12f, standHeight * 0.9f, 12f), Vector3.forward);
-
-            if (environmentDensity >= 0.55f)
+            if (!compactLayout)
+            {
+                BuildCornerCrowd(stadiumRoot, new Vector3(half + outerOffset * 0.35f, standHeight * 0.45f, turnRadius + outerOffset * 0.35f),
+                    new Vector3(12f, standHeight * 0.9f, 12f), Vector3.back);
+                BuildCornerCrowd(stadiumRoot, new Vector3(-half - outerOffset * 0.35f, standHeight * 0.45f, turnRadius + outerOffset * 0.35f),
+                    new Vector3(12f, standHeight * 0.9f, 12f), Vector3.back);
+                BuildCornerCrowd(stadiumRoot, new Vector3(half + outerOffset * 0.35f, standHeight * 0.45f, -(turnRadius + outerOffset * 0.35f)),
+                    new Vector3(12f, standHeight * 0.9f, 12f), Vector3.forward);
+                BuildCornerCrowd(stadiumRoot, new Vector3(-half - outerOffset * 0.35f, standHeight * 0.45f, -(turnRadius + outerOffset * 0.35f)),
+                    new Vector3(12f, standHeight * 0.9f, 12f), Vector3.forward);
                 BuildOuterBleachers(stadiumRoot, half, turnRadius, outerOffset + standDepth + 1f);
+            }
+
             BuildStadiumRing(stadiumRoot, half, turnRadius, outerOffset + standDepth + 2f);
             BuildEntranceArc(stadiumRoot, new Vector3(0f, 6f, turnRadius + outerOffset + standDepth + 3f), Vector3.back);
-            BuildTracksideRetainingWalls(stadiumRoot, half, turnRadius, trackWidth);
+
+            if (!compactLayout)
+                BuildTracksideRetainingWalls(stadiumRoot, half, turnRadius, trackWidth);
         }
 
         void BuildGrandstand(Transform parent, Vector3 center, Vector3 size, Quaternion rotation, int tiers,
@@ -238,66 +331,71 @@ namespace NeonLap.Environment
                 var crowdRoot = CreateEmpty("BleacherCrowd_T" + tier, section.transform);
                 crowdRoot.localPosition = new Vector3(0f, size.y * 0.15f + tier * (size.y * 0.22f), 0f);
                 var tierSize = new Vector3(size.x - tier * 1.2f, size.y * 0.2f, size.z - tier * 0.5f);
-                var maxCrowd = Mathf.Max(28, Mathf.RoundToInt(260 * crowdDensity));
-                FillCrowd(crowdRoot, tierSize, faceDirection, tier + seed, maxCrowd, 0.68f);
+                var maxCrowd = Mathf.Min(72, Mathf.Max(36, Mathf.RoundToInt(72 * crowdDensity)));
+                FillCrowd(crowdRoot, tierSize, faceDirection, tier + seed, maxCrowd, 0.52f);
             }
         }
 
         void FillCrowd(Transform parent, Vector3 areaSize, Vector3 faceDirection, int tier)
         {
-            var maxCrowd = Mathf.Max(24, Mathf.RoundToInt(240 * crowdDensity));
-            FillCrowd(parent, areaSize, faceDirection, tier, maxCrowd, tier >= 3 ? 0.72f : 0.64f);
+            var maxCrowd = Mathf.Min(96, Mathf.Max(32, Mathf.RoundToInt(96 * crowdDensity)));
+            FillCrowd(parent, areaSize, faceDirection, tier, maxCrowd, tier >= 3 ? 0.58f : 0.52f);
         }
 
         void FillCrowd(Transform parent, Vector3 areaSize, Vector3 faceDirection, int tier, int maxCrowdPerTier,
             float spacing)
         {
-            var cols = Mathf.Max(1, Mathf.FloorToInt(areaSize.x / spacing));
-            var rows = Mathf.Max(1, Mathf.FloorToInt(areaSize.z / spacing * 0.82f));
+            maxCrowdPerTier = Mathf.Clamp(maxCrowdPerTier, 0, 96);
+            if (maxCrowdPerTier <= 0)
+                return;
+
+            if (parent.GetComponent<CrowdWaveAnimator>() == null)
+            {
+                var wave = parent.gameObject.AddComponent<CrowdWaveAnimator>();
+                crowdReaction?.RegisterWave(wave);
+            }
+
             var random = new System.Random(1000 + tier * 131 + parent.name.GetHashCode());
+            var width = Mathf.Max(4f, areaSize.x);
+            var depth = Mathf.Max(4f, areaSize.z);
+            var attempts = maxCrowdPerTier * 3;
             var spawned = 0;
 
-            for (var row = 0; row < rows && spawned < maxCrowdPerTier; row++)
+            for (var attempt = 0; attempt < attempts && spawned < maxCrowdPerTier; attempt++)
             {
-                for (var col = 0; col < cols && spawned < maxCrowdPerTier; col++)
+                var x = ((float)random.NextDouble() - 0.5f) * width * 0.92f;
+                var z = ((float)random.NextDouble() - 0.5f) * depth * 0.82f;
+                if (faceDirection.z < 0f)
+                    z = -z;
+
+                var height = 0.95f + (float)random.NextDouble() * 0.45f;
+                var fanWidth = 0.42f + (float)random.NextDouble() * 0.16f;
+                var crowdMat = materials.Crowd[random.Next(materials.Crowd.Length)];
+
+                var fanRoot = CreateEmpty("Fan", parent);
+                fanRoot.localPosition = new Vector3(x, 0f, z);
+                if (faceDirection.sqrMagnitude > 0.001f)
+                    fanRoot.localRotation = Quaternion.LookRotation(faceDirection, Vector3.up);
+
+                CreatePrimitive(PrimitiveType.Capsule, "Body", fanRoot,
+                    new Vector3(0f, height * 0.5f, 0f), new Vector3(fanWidth, height, fanWidth), crowdMat);
+
+                if (random.NextDouble() < 0.18)
                 {
-                    if (random.NextDouble() < 0.006)
-                        continue;
-
-                    var x = (col - (cols - 1) * 0.5f) * spacing;
-                    var z = (row - rows * 0.5f) * spacing * 0.68f;
-                    if (faceDirection.z < 0f)
-                        z = -z;
-
-                    var height = 0.72f + (float)random.NextDouble() * 0.38f;
-                    var width = 0.34f + (float)random.NextDouble() * 0.14f;
-                    var crowdMat = materials.Crowd[random.Next(materials.Crowd.Length)];
-
-                    var fanRoot = CreateEmpty("Fan", parent);
-                    fanRoot.localPosition = new Vector3(x, 0f, z);
-                    if (faceDirection.sqrMagnitude > 0.001f)
-                        fanRoot.localRotation = Quaternion.LookRotation(faceDirection, Vector3.up);
-
-                    CreatePrimitive(PrimitiveType.Capsule, "Body", fanRoot,
-                        new Vector3(0f, height * 0.5f, 0f), new Vector3(width, height, width), crowdMat);
-
-                    var animateFan = random.NextDouble() < 0.22;
-                    if (animateFan)
-                    {
-                        var isJumping = random.NextDouble() < 0.3;
-                        var phase = (float)random.NextDouble() * Mathf.PI * 2f;
-                        var animator = fanRoot.gameObject.AddComponent<CrowdFanAnimator>();
-                        animator.Configure(isJumping, phase);
-                    }
-
-                    if (random.NextDouble() < 0.07)
-                    {
-                        var message = MotivationalSigns[random.Next(MotivationalSigns.Length)];
-                        AddMotivationalSign(fanRoot, height, message, random);
-                    }
-
-                    spawned++;
+                    var isJumping = random.NextDouble() < 0.3;
+                    var phase = (float)random.NextDouble() * Mathf.PI * 2f;
+                    var animator = fanRoot.gameObject.AddComponent<CrowdFanAnimator>();
+                    animator.Configure(isJumping, phase);
+                    crowdReaction?.RegisterFan(animator);
                 }
+
+                if (random.NextDouble() < 0.06)
+                {
+                    var message = MotivationalSigns[random.Next(MotivationalSigns.Length)];
+                    AddMotivationalSign(fanRoot, height, message, random);
+                }
+
+                spawned++;
             }
         }
 
@@ -369,6 +467,7 @@ namespace NeonLap.Environment
         void BuildJumbotron(Vector3 startPosition, Quaternion startRotation, float trackWidth)
         {
             var screenRoot = CreateEmpty("Jumbotron", environmentRoot);
+            jumbotronRoot = screenRoot.transform;
             var forward = startRotation * Vector3.forward;
             var outside = Vector3.Cross(forward, Vector3.up).normalized;
             var offset = outside * (trackWidth * 0.5f + 24f) - forward * 10f;
@@ -395,36 +494,86 @@ namespace NeonLap.Environment
             var canvas = canvasGo.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.WorldSpace;
             var rect = canvasGo.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(900f, 420f);
+            rect.sizeDelta = new Vector2(1100f, 480f);
 
             var bg = canvasGo.AddComponent<Image>();
             bg.color = new Color(0.02f, 0.06f, 0.1f, 0.96f);
 
-            var title = CreateScreenText(canvasGo.transform, "Title", new Vector2(0f, 150f), 52,
+            var title = CreateScreenText(canvasGo.transform, "Title", new Vector2(0f, 175f), 52,
                 new Color(0.35f, 1f, 1f), TextAnchor.UpperCenter);
             title.text = "NEON LAP LIVE";
 
-            var status = CreateScreenText(canvasGo.transform, "Status", new Vector2(0f, 95f), 30,
+            var status = CreateScreenText(canvasGo.transform, "Status", new Vector2(0f, 120f), 30,
                 new Color(1f, 0.9f, 0.35f), TextAnchor.UpperCenter);
             status.text = "NEON GRAND PRIX";
 
-            var position = CreateScreenText(canvasGo.transform, "Position", new Vector2(-180f, 10f), 72,
+            var position = CreateScreenText(canvasGo.transform, "Position", new Vector2(-260f, 15f), 72,
                 Color.white, TextAnchor.MiddleCenter);
             position.text = "P1/10";
 
-            var lap = CreateScreenText(canvasGo.transform, "Lap", new Vector2(180f, 10f), 56,
+            var lap = CreateScreenText(canvasGo.transform, "Lap", new Vector2(-80f, 15f), 56,
                 new Color(0.75f, 0.9f, 1f), TextAnchor.MiddleCenter);
             lap.text = "LAP 1/3";
 
-            var timer = CreateScreenText(canvasGo.transform, "Timer", new Vector2(0f, -95f), 64,
+            var timer = CreateScreenText(canvasGo.transform, "Timer", new Vector2(80f, 15f), 64,
                 new Color(0.45f, 1f, 1f), TextAnchor.MiddleCenter);
             timer.text = "00:00.0";
+
+            var leaderHeader = CreateScreenText(canvasGo.transform, "LeaderHeader", new Vector2(300f, 120f), 28,
+                new Color(0.55f, 0.95f, 1f), TextAnchor.UpperCenter);
+            leaderHeader.text = "TOP 3";
+
+            var leader1 = CreateScreenText(canvasGo.transform, "Leader1", new Vector2(300f, 70f), 30,
+                Color.white, TextAnchor.UpperCenter);
+            leader1.text = "P1  YOU";
+
+            var leader2 = CreateScreenText(canvasGo.transform, "Leader2", new Vector2(300f, 32f), 30,
+                new Color(0.88f, 0.92f, 1f), TextAnchor.UpperCenter);
+            leader2.text = "P2  —";
+
+            var leader3 = CreateScreenText(canvasGo.transform, "Leader3", new Vector2(300f, -6f), 30,
+                new Color(0.88f, 0.92f, 1f), TextAnchor.UpperCenter);
+            leader3.text = "P3  —";
+
+            var fastestLap = CreateScreenText(canvasGo.transform, "FastestLap", new Vector2(0f, -150f), 34,
+                new Color(0.45f, 1f, 1f, 0.55f), TextAnchor.MiddleCenter);
+            fastestLap.text = "FASTEST LAP —";
+
+            var incidentHeader = CreateScreenText(canvasGo.transform, "IncidentHeader", new Vector2(-300f, 70f), 24,
+                new Color(1f, 0.55f, 0.35f), TextAnchor.UpperLeft);
+            incidentHeader.text = "TRACK FEED";
+            incidentHeader.alignment = TextAnchor.UpperLeft;
+
+            var incident1 = CreateScreenText(canvasGo.transform, "Incident1", new Vector2(-300f, 28f), 24,
+                new Color(1f, 0.82f, 0.45f), TextAnchor.UpperLeft);
+            incident1.alignment = TextAnchor.UpperLeft;
+
+            var incident2 = CreateScreenText(canvasGo.transform, "Incident2", new Vector2(-300f, -4f), 24,
+                new Color(1f, 0.82f, 0.45f), TextAnchor.UpperLeft);
+            incident2.alignment = TextAnchor.UpperLeft;
+
+            var incident3 = CreateScreenText(canvasGo.transform, "Incident3", new Vector2(-300f, -36f), 24,
+                new Color(1f, 0.82f, 0.45f), TextAnchor.UpperLeft);
+            incident3.alignment = TextAnchor.UpperLeft;
+
+            var incident4 = CreateScreenText(canvasGo.transform, "Incident4", new Vector2(-300f, -68f), 24,
+                new Color(1f, 0.82f, 0.45f), TextAnchor.UpperLeft);
+            incident4.alignment = TextAnchor.UpperLeft;
 
             jumbotronTitle = title;
             jumbotronPosition = position;
             jumbotronLap = lap;
             jumbotronTimer = timer;
             jumbotronStatus = status;
+            jumbotronLeaderHeader = leaderHeader;
+            jumbotronLeader1 = leader1;
+            jumbotronLeader2 = leader2;
+            jumbotronLeader3 = leader3;
+            jumbotronFastestLap = fastestLap;
+            jumbotronIncident1 = incident1;
+            jumbotronIncident2 = incident2;
+            jumbotronIncident3 = incident3;
+            jumbotronIncident4 = incident4;
 
             var board = screenRoot.gameObject.AddComponent<StadiumScoreboard>();
             scoreboard = board;
@@ -439,11 +588,13 @@ namespace NeonLap.Environment
             glowLight.range = 22f;
         }
 
-        void BuildCitySkyline(float half, float turnRadius)
+        void BuildCitySkyline(float half, float turnRadius, float trackWidth, float densityScale = 1f)
         {
             var cityRoot = CreateEmpty("CitySkyline", environmentRoot);
             var random = new System.Random(4242);
-            var buildingCount = Mathf.Max(8, Mathf.RoundToInt(28 * environmentDensity));
+            var buildingCount = Mathf.Max(8, Mathf.RoundToInt(36 * environmentDensity * densityScale));
+            if (trackCenterline != null && trackCenterline.Count > 40)
+                buildingCount = Mathf.Max(10, buildingCount / 2);
 
             for (var i = 0; i < buildingCount; i++)
             {
@@ -455,8 +606,12 @@ namespace NeonLap.Environment
                 var width = 4f + (float)random.NextDouble() * 7f;
                 var depth = 4f + (float)random.NextDouble() * 7f;
 
+                var buildingPosition = new Vector3(x, height * 0.5f, z);
+                if (IsNearTrack(new Vector3(x, 0f, z), trackWidth * 0.85f))
+                    continue;
+
                 var building = CreatePrimitive(PrimitiveType.Cube, "Building_" + i, cityRoot,
-                    new Vector3(x, height * 0.5f, z), new Vector3(width, height, depth), materials.Building);
+                    buildingPosition, new Vector3(width, height, depth), materials.Building);
 
                 if (random.NextDouble() > 0.35)
                 {
@@ -471,14 +626,122 @@ namespace NeonLap.Environment
                     CreatePrimitive(PrimitiveType.Cylinder, "Antenna_" + i, building.transform,
                         new Vector3(0f, 0.55f, 0f), new Vector3(0.15f, 0.4f, 0.15f), materials.BuildingAccent);
                 }
+
+                if (GameQualitySettings.UseProceduralLod)
+                    ProceduralEnvironmentLod.AddBoxLod(building, new Vector3(width, height, depth), materials.Building);
             }
         }
 
-        void BuildTrees(float half, float turnRadius, float trackWidth)
+        void BuildDockyardProps(float half, float turnRadius, float trackWidth)
+        {
+            var dockRoot = CreateEmpty("Dockyard", environmentRoot);
+            var random = new System.Random(7788);
+            var containerCount = Mathf.Max(14, Mathf.RoundToInt(48 * environmentDensity * themeProfile.ContainerDensity));
+
+            for (var i = 0; i < containerCount; i++)
+            {
+                var angle = (float)random.NextDouble() * Mathf.PI * 2f;
+                var distance = half + 42f + (float)random.NextDouble() * 55f;
+                var x = Mathf.Cos(angle) * distance;
+                var z = Mathf.Sin(angle) * (turnRadius + 28f + (float)random.NextDouble() * 45f);
+                if (IsNearTrack(new Vector3(x, 0f, z), trackWidth * 0.9f))
+                    continue;
+
+                var stackHeight = 1 + random.Next(3);
+                var width = 5f + (float)random.NextDouble() * 4f;
+                var depth = 2.5f + (float)random.NextDouble() * 2f;
+                var unitHeight = 2.6f;
+                var baseY = unitHeight * 0.5f;
+
+                for (var stack = 0; stack < stackHeight; stack++)
+                {
+                    var containerMat = stack % 2 == 0 ? materials.Building : materials.BuildingAccent;
+                    CreatePrimitive(PrimitiveType.Cube, $"Container_{i}_{stack}", dockRoot,
+                        new Vector3(x, baseY + stack * unitHeight, z),
+                        new Vector3(width, unitHeight, depth), containerMat);
+                }
+            }
+
+            var craneCount = Mathf.Max(3, Mathf.RoundToInt(8 * environmentDensity));
+            for (var c = 0; c < craneCount; c++)
+            {
+                var angle = c / (float)craneCount * Mathf.PI * 2f + 0.4f;
+                var distance = half + 72f;
+                var x = Mathf.Cos(angle) * distance;
+                var z = Mathf.Sin(angle) * (turnRadius + 52f);
+                var mast = CreatePrimitive(PrimitiveType.Cube, "CraneMast_" + c, dockRoot,
+                    new Vector3(x, 22f, z), new Vector3(1.2f, 44f, 1.2f), materials.LightTower);
+                CreatePrimitive(PrimitiveType.Cube, "CraneArm_" + c, mast.transform,
+                    new Vector3(0f, 0.35f, 6f), new Vector3(0.8f, 0.8f, 14f), materials.BuildingAccent);
+            }
+        }
+
+        void BuildRockFormations(float half, float turnRadius, float trackWidth, float densityScale)
+        {
+            var rockRoot = CreateEmpty("RockFormations", environmentRoot);
+            var random = new System.Random(3311);
+            var rockCount = Mathf.Max(10, Mathf.RoundToInt(42 * environmentDensity * densityScale));
+
+            for (var i = 0; i < rockCount; i++)
+            {
+                var angle = (float)random.NextDouble() * Mathf.PI * 2f;
+                var distance = half * 0.45f + (float)random.NextDouble() * (half + 40f);
+                var x = Mathf.Cos(angle) * distance;
+                var z = Mathf.Sin(angle) * (turnRadius + 12f + (float)random.NextDouble() * (half * 0.55f));
+                if (IsNearTrack(new Vector3(x, 0f, z), trackWidth * 0.8f))
+                    continue;
+
+                var height = 4f + (float)random.NextDouble() * 14f;
+                var width = 6f + (float)random.NextDouble() * 12f;
+                var depth = 5f + (float)random.NextDouble() * 10f;
+                CreatePrimitive(PrimitiveType.Cube, "Rock_" + i, rockRoot,
+                    new Vector3(x, height * 0.5f, z),
+                    new Vector3(width, height, depth), materials.Building);
+            }
+        }
+
+        void BuildPalms(float half, float turnRadius, float trackWidth, float densityScale)
+        {
+            var palmRoot = CreateEmpty("Palms", environmentRoot);
+            var random = new System.Random(12004);
+            var palmCount = Mathf.Max(10, Mathf.RoundToInt(52 * environmentDensity * densityScale));
+            var innerRadius = half * 0.5f + trackWidth;
+            var outerRadius = half + 42f;
+
+            for (var i = 0; i < palmCount; i++)
+            {
+                var angle = (float)random.NextDouble() * Mathf.PI * 2f;
+                var radius = Mathf.Lerp(innerRadius, outerRadius, (float)random.NextDouble());
+                var x = Mathf.Cos(angle) * radius;
+                var z = Mathf.Sin(angle) * (turnRadius + 16f + (float)random.NextDouble() * (half * 0.5f));
+                if (IsNearTrack(new Vector3(x, 0f, z), trackWidth * 0.75f))
+                    continue;
+
+                BuildPalm(palmRoot, new Vector3(x, 0f, z), 0.9f + (float)random.NextDouble() * 0.65f, random);
+            }
+        }
+
+        void BuildPalm(Transform parent, Vector3 position, float scale, System.Random random)
+        {
+            var palm = CreateEmpty("Palm", parent);
+            palm.transform.position = position;
+            palm.transform.rotation = Quaternion.Euler(0f, (float)random.NextDouble() * 360f, 0f);
+
+            CreatePrimitive(PrimitiveType.Cylinder, "Trunk", palm.transform, new Vector3(0f, 2.4f * scale, 0f),
+                new Vector3(0.28f * scale, 2.4f * scale, 0.28f * scale), materials.Trunk);
+            CreatePrimitive(PrimitiveType.Sphere, "FrondA", palm.transform, new Vector3(0.8f * scale, 4.8f * scale, 0f),
+                new Vector3(2.4f * scale, 0.35f * scale, 1.4f * scale), materials.Foliage);
+            CreatePrimitive(PrimitiveType.Sphere, "FrondB", palm.transform, new Vector3(-0.7f * scale, 4.7f * scale, 0.5f * scale),
+                new Vector3(2.1f * scale, 0.32f * scale, 1.2f * scale), materials.Foliage);
+            CreatePrimitive(PrimitiveType.Sphere, "FrondC", palm.transform, new Vector3(0.1f * scale, 4.9f * scale, -0.8f * scale),
+                new Vector3(2.2f * scale, 0.3f * scale, 1.3f * scale), materials.Foliage);
+        }
+
+        void BuildTrees(float half, float turnRadius, float trackWidth, float densityScale = 1f)
         {
             var treeRoot = CreateEmpty("Trees", environmentRoot);
             var random = new System.Random(9001);
-            var treeCount = Mathf.Max(12, Mathf.RoundToInt(64 * environmentDensity));
+            var treeCount = Mathf.Max(8, Mathf.RoundToInt(64 * environmentDensity * densityScale));
             var innerRadius = half * 0.55f + trackWidth;
             var outerRadius = half + 38f;
 
@@ -489,7 +752,7 @@ namespace NeonLap.Environment
                 var x = Mathf.Cos(angle) * radius;
                 var z = Mathf.Sin(angle) * (turnRadius + 18f + (float)random.NextDouble() * (half * 0.45f));
 
-                if (Mathf.Abs(x) < half + 8f && Mathf.Abs(z) < turnRadius + 8f)
+                if (IsNearTrack(new Vector3(x, 0f, z), trackWidth * 0.75f))
                     continue;
 
                 BuildTree(treeRoot, new Vector3(x, 0f, z), 0.75f + (float)random.NextDouble() * 0.55f, random);
@@ -508,6 +771,9 @@ namespace NeonLap.Environment
                 new Vector3(2.2f * scale, 2.4f * scale, 2.2f * scale), materials.Foliage);
             CreatePrimitive(PrimitiveType.Sphere, "CanopyGlow", tree.transform, new Vector3(0f, 2.8f * scale, 0f),
                 new Vector3(1.2f * scale, 1.3f * scale, 1.2f * scale), materials.BuildingAccent);
+
+            if (GameQualitySettings.UseProceduralLod)
+                ProceduralEnvironmentLod.AddTreeLod(tree.gameObject, scale, materials.Trunk, materials.Foliage);
         }
 
         void BuildStadiumLightingSystem(float half, float turnRadius, float trackWidth)
@@ -715,6 +981,37 @@ namespace NeonLap.Environment
         {
             var go = CreatePrimitive(PrimitiveType.Cube, name, parent, Vector3.zero, size, material);
             go.transform.position = worldPosition;
+        }
+
+        bool IsNearTrack(Vector3 worldPosition, float clearance)
+        {
+            if (trackCenterline == null || trackCenterline.Count < 2)
+                return false;
+
+            var minDistance = float.MaxValue;
+            for (var i = 0; i < trackCenterline.Count; i++)
+            {
+                var a = trackCenterline[i];
+                var b = trackCenterline[(i + 1) % trackCenterline.Count];
+                minDistance = Mathf.Min(minDistance, DistancePointToSegmentXZ(worldPosition, a, b));
+            }
+
+            return minDistance < clearance;
+        }
+
+        static float DistancePointToSegmentXZ(Vector3 point, Vector3 a, Vector3 b)
+        {
+            var p = new Vector2(point.x, point.z);
+            var a2 = new Vector2(a.x, a.z);
+            var b2 = new Vector2(b.x, b.z);
+            var ab = b2 - a2;
+            var lengthSq = ab.sqrMagnitude;
+            if (lengthSq < 0.0001f)
+                return Vector2.Distance(p, a2);
+
+            var t = Mathf.Clamp01(Vector2.Dot(p - a2, ab) / lengthSq);
+            var closest = a2 + ab * t;
+            return Vector2.Distance(p, closest);
         }
 
         static void AddTrackSpotLight(Transform parent, Vector3 position, Vector3 aimPoint, Color color,

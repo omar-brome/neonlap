@@ -12,11 +12,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0e2a4c6b8d0f2e4a6c8e0b2d4f6a8c00, type: 3}
   m_Name: DefaultTrackDefinition
   m_EditorClassIdentifier: 
-  trackName: Oval Circuit
+  trackName: Neon Circuit
   sceneName: SampleScene
   layout: 0
   lapCount: 1
   checkpointCount: 10
-  straightLength: 80
-  turnRadius: 25
+  straightLength: 88
+  turnRadius: 22
   trackWidth: 26

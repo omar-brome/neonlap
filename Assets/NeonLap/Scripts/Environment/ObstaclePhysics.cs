@@ -43,13 +43,31 @@ namespace NeonLap.Environment
             rb.useGravity = false;
             rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             rb.interpolation = RigidbodyInterpolation.Interpolate;
-
-            HazardVisibilityMarker.Attach(go);
         }
 
         public static void ConfigureTrackBarrier(GameObject go)
         {
-            ConfigureStaticObstacle(go);
+            if (go == null)
+                return;
+
+            go.layer = NeonLapLayers.Obstacle;
+            go.tag = "Barrier";
+
+            var collider = go.GetComponent<Collider>();
+            if (collider == null)
+                collider = go.AddComponent<BoxCollider>();
+
+            collider.isTrigger = false;
+            collider.material = GetObstacleMaterial();
+
+            var rb = go.GetComponent<Rigidbody>();
+            if (rb == null)
+                rb = go.AddComponent<Rigidbody>();
+
+            rb.isKinematic = true;
+            rb.useGravity = false;
+            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+            rb.interpolation = RigidbodyInterpolation.Interpolate;
         }
 
         public static void ConfigureMovingObstacle(Rigidbody rb)

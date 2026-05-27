@@ -1,4 +1,6 @@
 using NeonLap.Input;
+using NeonLap.VFX;
+using NeonLap.Track;
 using UnityEngine;
 
 namespace NeonLap.Vehicle
@@ -19,12 +21,29 @@ namespace NeonLap.Vehicle
         VehicleBarrelRoll barrelRoll;
         VehicleFuelSystem fuelSystem;
         float currentGripMultiplier = 1f;
+        float zoneHoverForceMultiplier = 1f;
+        float ghostSpeedPenaltyMultiplier = 1f;
+        float ghostSpeedPenaltyUntil;
+        bool hasElevationTrack;
 
+        public VehicleProfile Profile => profile;
         public float CurrentSpeed => rb != null ? rb.linearVelocity.magnitude : 0f;
         public float LateralSpeed { get; private set; }
         public float SteerInput { get; private set; }
         public bool IsDrifting { get; private set; }
         public bool IsBraking { get; private set; }
+        public bool HandbrakeHeld => inputProvider != null && inputProvider.DriftHeld;
+
+        public void SetZoneHoverForceMultiplier(float multiplier)
+        {
+            zoneHoverForceMultiplier = Mathf.Clamp(multiplier, 0.2f, 1.5f);
+        }
+
+        public void ApplyGhostSpeedPenalty(float speedMultiplier, float durationSeconds)
+        {
+            ghostSpeedPenaltyMultiplier = Mathf.Clamp(speedMultiplier, 0.5f, 1f);
+            ghostSpeedPenaltyUntil = Time.time + Mathf.Max(durationSeconds, 0.1f);
+        }
 
         public void Configure(VehicleProfile vehicleProfile, IVehicleInputProvider provider)
         {
@@ -56,6 +75,9 @@ namespace NeonLap.Vehicle
 
             if (inputProvider == null && GetComponent<AIVehicleController>() == null)
                 Debug.LogError("VehicleController: IVehicleInputProvider is not assigned.", this);
+
+            var track = NeonLap.Core.GameManager.Instance != null ? NeonLap.Core.GameManager.Instance.GetCurrentTrackDefinition() : null;
+            hasElevationTrack = track != null && TrackLayoutUtility.HasElevation(track.layout);
         }
 
         void ResolveInputProvider()
@@ -124,7 +146,8 @@ namespace NeonLap.Vehicle
                 return;
 
             var error = profile.hoverHeight - probe.Distance;
-            var force = Vector3.up * (error * profile.hoverForce - rb.linearVelocity.y * profile.hoverDamping);
+            var hoverForce = profile.hoverForce * zoneHoverForceMultiplier;
+            var force = Vector3.up * (error * hoverForce - rb.linearVelocity.y * profile.hoverDamping);
             rb.AddForce(force, ForceMode.Acceleration);
         }
 
@@ -133,17 +156,26 @@ namespace NeonLap.Vehicle
             var forward = transform.forward;
             var speed = Vector3.Dot(rb.linearVelocity, forward);
 
-            if (inputProvider.Accelerate > 0.01f && (fuelSystem == null || !fuelSystem.IsEmpty))
+            var accel = inputProvider.Accelerate;
+            if (NeonLap.Core.GameAccessibilitySettings.AutoAccelerate && accel < 0.01f && inputProvider.Brake < 0.01f)
+                accel = 1f;
+
+            if (accel > 0.01f && (fuelSystem == null || !fuelSystem.IsEmpty))
             {
                 var accelMultiplier = nitroBoost != null ? nitroBoost.ActiveAccelerationMultiplier : 1f;
                 accelMultiplier *= hoverPodSystem != null ? hoverPodSystem.SpeedMultiplier : 1f;
-                rb.AddForce(forward * (profile.acceleration * inputProvider.Accelerate * accelMultiplier),
+                rb.AddForce(forward * (profile.acceleration * accel * accelMultiplier),
                     ForceMode.Acceleration);
             }
             else if (inputProvider.Brake > 0.01f)
             {
                 if (speed > 1f)
-                    rb.AddForce(-forward * (profile.brakeForce * inputProvider.Brake), ForceMode.Acceleration);
+                {
+                    var brake = profile.brakeForce;
+                    if (hasElevationTrack && rb != null && rb.linearVelocity.y < -0.65f)
+                        brake *= 1.25f; // heavier braking in dips
+                    rb.AddForce(-forward * (brake * inputProvider.Brake), ForceMode.Acceleration);
+                }
                 else
                     rb.AddForce(-forward * (profile.reverseForce * inputProvider.Brake), ForceMode.Acceleration);
             }
@@ -153,6 +185,14 @@ namespace NeonLap.Vehicle
         {
             var speedRatio = Mathf.Clamp01(CurrentSpeed / profile.maxSpeed);
             var turnSpeed = Mathf.Lerp(profile.turnSpeedLow, profile.turnSpeedHigh, speedRatio);
+
+            var assist = NeonLap.Core.GameAccessibilitySettings.SteeringAssist;
+            if (assist > 0.001f)
+            {
+                var highSpeed = Mathf.InverseLerp(0.45f, 1f, speedRatio);
+                var clamp = Mathf.Lerp(1f, 0.55f, assist * highSpeed);
+                turnSpeed *= clamp;
+            }
 
             if (IsDrifting && forwardSpeed > profile.driftMinSpeed * 0.5f)
             {
@@ -201,7 +241,7 @@ namespace NeonLap.Vehicle
             var forward = transform.forward;
             var lateralVelocity = rb.linearVelocity - forward * Vector3.Dot(rb.linearVelocity, forward);
             lateralVelocity.y = 0f;
-            var gripScale = currentGripMultiplier;
+            var gripScale = currentGripMultiplier * GetWeatherGripMultiplier();
             if (slipEffect != null)
                 gripScale *= slipEffect.GripMultiplier;
 
@@ -237,12 +277,24 @@ namespace NeonLap.Vehicle
             if (IsDrifting)
                 downforce *= 0.55f;
 
+            if (hasElevationTrack)
+            {
+                var vy = rb != null ? rb.linearVelocity.y : 0f;
+                if (vy > 0.65f)
+                    downforce *= 0.35f; // lighter over crests / mid-air
+                else if (vy < -0.65f)
+                    downforce *= 1.35f; // extra bite on descents
+            }
+
             rb.AddForce(-transform.up * downforce, ForceMode.Acceleration);
         }
 
         void ClampSpeed()
         {
-            var maxSpeed = profile.maxSpeed;
+            if (Time.time >= ghostSpeedPenaltyUntil && ghostSpeedPenaltyMultiplier < 0.999f)
+                ghostSpeedPenaltyMultiplier = 1f;
+
+            var maxSpeed = profile.maxSpeed * GetWeatherTopSpeedMultiplier() * ghostSpeedPenaltyMultiplier;
             if (nitroBoost != null)
                 maxSpeed *= nitroBoost.ActiveSpeedMultiplier;
             if (hoverPodSystem != null)
@@ -263,6 +315,18 @@ namespace NeonLap.Vehicle
             var targetUp = probe.GroundNormal;
             var targetRotation = Quaternion.FromToRotation(transform.up, targetUp) * rb.rotation;
             rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, alignSpeed * Time.fixedDeltaTime));
+        }
+
+        static float GetWeatherGripMultiplier()
+        {
+            var weather = DynamicWeatherSystem.Instance;
+            return weather != null ? weather.GripMultiplier : 1f;
+        }
+
+        static float GetWeatherTopSpeedMultiplier()
+        {
+            var weather = DynamicWeatherSystem.Instance;
+            return weather != null ? weather.TopSpeedMultiplier : 1f;
         }
     }
 }

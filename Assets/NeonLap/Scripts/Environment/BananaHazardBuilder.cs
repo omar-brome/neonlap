@@ -8,15 +8,14 @@ namespace NeonLap.Environment
     public class BananaHazardBuilder : MonoBehaviour
     {
         Transform hazardRoot;
-        Material peelMaterial;
-        Material tipMaterial;
 
         public void Build(IReadOnlyList<Transform> waypoints, TrackDefinition definition)
         {
             if (waypoints == null || waypoints.Count < 12)
                 return;
 
-            var density = GameQualitySettings.Preset.BananaDensity;
+            var levelIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+            var density = TrackLevelConfig.GetBananaDensity(levelIndex, GameQualitySettings.Preset.BananaDensity);
             if (density <= 0.01f)
             {
                 if (hazardRoot != null)
@@ -29,7 +28,6 @@ namespace NeonLap.Environment
 
             hazardRoot = new GameObject("BananaHazards").transform;
             hazardRoot.SetParent(transform, false);
-            CreateMaterials();
 
             var trackWidth = definition != null ? definition.trackWidth : 26f;
             var startSkip = Mathf.Max(20, waypoints.Count / 5);
@@ -45,20 +43,9 @@ namespace NeonLap.Environment
                 rotation *= Quaternion.Euler(0f, Random.Range(-28f, 28f), 0f);
                 SpawnBanana(position, rotation, i);
             }
-        }
 
-        void CreateMaterials()
-        {
-            var lit = Shader.Find("Universal Render Pipeline/Lit");
-
-            peelMaterial = new Material(lit);
-            peelMaterial.SetColor("_BaseColor", new Color(0.98f, 0.86f, 0.08f));
-            peelMaterial.SetFloat("_Smoothness", 0.62f);
-            peelMaterial.SetFloat("_Metallic", 0.02f);
-
-            tipMaterial = new Material(lit);
-            tipMaterial.SetColor("_BaseColor", new Color(0.42f, 0.24f, 0.06f));
-            tipMaterial.SetFloat("_Smoothness", 0.35f);
+            if (levelIndex == 2)
+                SpawnHairpinCluster(waypoints, trackWidth, density, startIndex: hazardIndices.Count);
         }
 
         static List<int> PickBananaIndices(int waypointCount, int startSkip, float density)
@@ -74,66 +61,48 @@ namespace NeonLap.Environment
 
         void SpawnBanana(Vector3 position, Quaternion rotation, int index)
         {
-            var banana = new GameObject("BananaHazard_" + index);
-            banana.transform.SetParent(hazardRoot, false);
-            banana.transform.SetPositionAndRotation(
-                ObstaclePhysics.SnapToTrackSurface(position, 0.55f),
-                rotation);
-            banana.layer = NeonLapLayers.Track;
-
-            var trigger = banana.AddComponent<BoxCollider>();
-            trigger.isTrigger = true;
-            trigger.size = new Vector3(2.8f, 1.4f, 4.2f);
-            trigger.center = new Vector3(0f, 0.45f, 0f);
-
-            banana.AddComponent<BananaSlipHazard>();
-
-            var visual = new GameObject("Visual");
-            visual.transform.SetParent(banana.transform, false);
-            visual.transform.localPosition = new Vector3(0f, 0.35f, 0f);
-
-            BuildBananaMesh(visual.transform);
+            BananaHazardFactory.Spawn(position, rotation, hazardRoot, "BananaHazard_" + index,
+                respawnAfterSlip: true, respawnDelay: 14f);
         }
 
-        void BuildBananaMesh(Transform parent)
+        void SpawnHairpinCluster(IReadOnlyList<Transform> waypoints, float trackWidth, float density, int startIndex)
         {
-            var body = CreatePart(parent, "BananaBody", PrimitiveType.Capsule,
-                new Vector3(0f, 0f, 0f), new Vector3(0.75f, 1.15f, 0.75f),
-                Quaternion.Euler(18f, 0f, 92f), peelMaterial);
-            body.transform.localPosition = new Vector3(0f, 0.05f, 0f);
+            var count = waypoints.Count;
+            if (count < 24 || hazardRoot == null)
+                return;
 
-            CreatePart(parent, "BananaCurve", PrimitiveType.Capsule,
-                new Vector3(0.15f, 0.12f, 0.55f), new Vector3(0.62f, 0.85f, 0.62f),
-                Quaternion.Euler(34f, 18f, 96f), peelMaterial);
+            var hairpinIndex = FindTightestTurnIndex(waypoints);
+            var clusterCount = Mathf.Clamp(Mathf.RoundToInt(6f * Mathf.Clamp01(density)), 3, 8);
+            var lateralPattern = new[] { -0.22f, 0.22f, 0f, -0.1f, 0.1f };
 
-            CreatePart(parent, "BananaTipStem", PrimitiveType.Capsule,
-                new Vector3(-0.05f, 0.08f, -0.95f), new Vector3(0.28f, 0.35f, 0.28f),
-                Quaternion.Euler(8f, 0f, 90f), tipMaterial);
-
-            CreatePart(parent, "BananaTipEnd", PrimitiveType.Sphere,
-                new Vector3(0.22f, 0.18f, 1.05f), new Vector3(0.42f, 0.42f, 0.42f),
-                Quaternion.identity, tipMaterial);
-
-            CreatePart(parent, "BananaHighlight", PrimitiveType.Cube,
-                new Vector3(-0.18f, 0.08f, 0.15f), new Vector3(0.08f, 0.55f, 1.4f),
-                Quaternion.Euler(12f, 0f, 18f), peelMaterial);
+            for (var i = 0; i < clusterCount; i++)
+            {
+                var index = (hairpinIndex + i * 2) % count;
+                var lateral = trackWidth * lateralPattern[i % lateralPattern.Length];
+                var position = GetTrackPoint(waypoints, index, lateral);
+                var rotation = GetTrackRotation(waypoints, index);
+                rotation *= Quaternion.Euler(0f, Random.Range(-18f, 18f), 0f);
+                SpawnBanana(position, rotation, startIndex + i);
+            }
         }
 
-        static GameObject CreatePart(Transform parent, string name, PrimitiveType type, Vector3 localPosition,
-            Vector3 localScale, Quaternion localRotation, Material material)
+        static int FindTightestTurnIndex(IReadOnlyList<Transform> waypoints)
         {
-            var go = GameObject.CreatePrimitive(type);
-            go.name = name;
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = localPosition;
-            go.transform.localScale = localScale;
-            go.transform.localRotation = localRotation;
-            Object.Destroy(go.GetComponent<Collider>());
+            var count = waypoints.Count;
+            var bestIndex = 0;
+            var bestAngle = 0f;
+            for (var i = 0; i < count; i++)
+            {
+                var prev = GetForward(waypoints, (i - 1 + count) % count);
+                var next = GetForward(waypoints, i);
+                var angle = Vector3.Angle(prev, next);
+                if (angle <= bestAngle)
+                    continue;
+                bestAngle = angle;
+                bestIndex = i;
+            }
 
-            if (material != null)
-                go.GetComponent<Renderer>().sharedMaterial = material;
-
-            return go;
+            return bestIndex;
         }
 
         static Vector3 GetTrackPoint(IReadOnlyList<Transform> waypoints, int index, float lateral)

@@ -25,16 +25,55 @@ namespace NeonLap.Vehicle
         VehicleAppearance appearance;
         RacerProgress racerProgress;
         Transform visualRoot;
+        VehicleDamageMode damageMode = VehicleDamageMode.Cosmetic;
+        RaceDamageProfile damageProfile;
+        VehicleHealthSystem healthSystem;
         float lastDetachTime;
         int detachedCount;
+        int initialPartCount;
+
+        public float AttachedPartRatio
+        {
+            get
+            {
+                if (initialPartCount <= 0)
+                    return 1f;
+
+                var attached = 0;
+                foreach (var part in detachableParts)
+                {
+                    if (part != null && part.IsAttached)
+                        attached++;
+                }
+
+                return (float)attached / initialPartCount;
+            }
+        }
+
+        public float DamagePercent => 1f - AttachedPartRatio;
 
         void Awake()
         {
             rb = GetComponent<Rigidbody>();
             appearance = GetComponent<VehicleAppearance>();
             racerProgress = GetComponent<RacerProgress>();
+            healthSystem = GetComponent<VehicleHealthSystem>();
             raceManager = FindAnyObjectByType<RaceManager>();
+            damageProfile = RaceModeDamageRules.GetDamageProfile();
             CacheVisualParts();
+        }
+
+        public void Configure(VehicleDamageMode mode)
+        {
+            damageMode = mode;
+        }
+
+        public void Configure(RaceDamageProfile profile)
+        {
+            damageProfile = profile;
+            damageMode = profile.DamageMode;
+            playerPartDetachMultiplier = profile.PlayerPartDetachMultiplier;
+            aiPartDetachMultiplier = profile.AiPartDetachMultiplier;
         }
 
         void CacheVisualParts()
@@ -49,10 +88,15 @@ namespace NeonLap.Vehicle
                 if (part.IsAttached)
                     detachableParts.Add(part);
             }
+
+            initialPartCount = Mathf.Max(detachableParts.Count, 1);
         }
 
         void OnCollisionEnter(Collision collision)
         {
+            if (damageMode == VehicleDamageMode.Off)
+                return;
+
             if (!ShouldApplyDamage(collision.collider))
                 return;
 
@@ -75,8 +119,25 @@ namespace NeonLap.Vehicle
                 return;
 
             var impactSpeed = collision.relativeVelocity.magnitude;
+
+            if (damageMode == VehicleDamageMode.Full && healthSystem != null && healthSystem.enabled)
+            {
+                var isPlayerRacer = racerProgress != null && racerProgress.IsPlayer;
+                var healthScale = isPlayerRacer
+                    ? damageProfile.PlayerHealthDamageMultiplier
+                    : damageProfile.AiHealthDamageMultiplier;
+                if (impactSpeed >= heavyImpactSpeed)
+                    healthSystem.ApplyDamage(impactSpeed * 2.2f * healthScale);
+            }
             if (impactSpeed < minImpactSpeed)
                 return;
+
+            if (racerProgress != null && racerProgress.IsPlayer)
+            {
+                var shield = GetComponent<VehicleCombatShield>();
+                if (shield != null && shield.TryAbsorbHit())
+                    return;
+            }
 
             var contact = collision.GetContact(0);
             ApplyDamage(contact.point, contact.normal, impactSpeed);
@@ -85,6 +146,12 @@ namespace NeonLap.Vehicle
 
         void ApplyDamage(Vector3 impactPoint, Vector3 impactNormal, float impactSpeed)
         {
+            if (damageMode == VehicleDamageMode.Cosmetic)
+            {
+                ApplyCosmeticDamage(impactPoint, impactNormal, impactSpeed);
+                return;
+            }
+
             var isPlayer = racerProgress != null && racerProgress.IsPlayer;
             var partMultiplier = isPlayer ? playerPartDetachMultiplier : aiPartDetachMultiplier;
             var partCount = impactSpeed >= heavyImpactSpeed
@@ -135,10 +202,22 @@ namespace NeonLap.Vehicle
                 detachedThisHit++;
             }
 
+            TryEliminateFromCriticalDamage();
+
             if (impactSpeed >= heavyImpactSpeed * 0.85f)
                 SpawnImpactShards(impactPoint, impactNormal, impactSpeed, detachedThisHit == 0 ? 4 : 2);
             else if (impactSpeed >= minImpactSpeed * 2f)
                 SpawnImpactShards(impactPoint, impactNormal, impactSpeed, 2);
+        }
+
+        void ApplyCosmeticDamage(Vector3 impactPoint, Vector3 impactNormal, float impactSpeed)
+        {
+            var shardCount = impactSpeed >= heavyImpactSpeed
+                ? 3
+                : impactSpeed >= minImpactSpeed * 1.8f
+                    ? 2
+                    : 1;
+            SpawnImpactShards(impactPoint, impactNormal, impactSpeed, shardCount);
         }
 
         void DetachPart(DetachableVehiclePart part, Vector3 impactPoint, Vector3 impactNormal, float impactSpeed)
@@ -210,36 +289,71 @@ namespace NeonLap.Vehicle
             shardMat.SetFloat("_Metallic", 0.45f);
             shardMat.SetFloat("_Smoothness", 0.35f);
 
+            var debrisPool = VehicleDamageDebrisPool.Instance;
             for (var i = 0; i < shardCount; i++)
             {
                 if (detachedCount >= maxDetachedParts)
                     break;
 
-                var shard = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                shard.name = "ImpactShard";
-                shard.transform.position = impactPoint + Random.insideUnitSphere * 0.18f;
-                shard.transform.rotation = Random.rotation;
-                shard.transform.localScale = Vector3.one * Random.Range(0.08f, 0.22f);
-                shard.GetComponent<Renderer>().material = shardMat;
-                shard.layer = NeonLapLayers.Obstacle;
-                shard.AddComponent<VehicleDebrisMarker>();
+                GameObject shard;
+                if (debrisPool != null)
+                {
+                    shard = debrisPool.RentShard(
+                        impactPoint + Random.insideUnitSphere * 0.18f,
+                        Random.rotation,
+                        Vector3.one * Random.Range(0.08f, 0.22f),
+                        shardMat,
+                        8f);
+                }
+                else
+                {
+                    shard = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    shard.name = "ImpactShard";
+                    shard.transform.position = impactPoint + Random.insideUnitSphere * 0.18f;
+                    shard.transform.rotation = Random.rotation;
+                    shard.transform.localScale = Vector3.one * Random.Range(0.08f, 0.22f);
+                    shard.GetComponent<Renderer>().material = shardMat;
+                    shard.layer = NeonLapLayers.Obstacle;
+                    shard.AddComponent<VehicleDebrisMarker>();
 
-                var shardBody = shard.AddComponent<Rigidbody>();
-                shardBody.mass = Random.Range(0.4f, 1.4f);
-                shardBody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-                ObstaclePhysics.ApplyDebrisMaterial(shard.GetComponent<Collider>());
+                    var shardBody = shard.AddComponent<Rigidbody>();
+                    shardBody.mass = Random.Range(0.4f, 1.4f);
+                    shardBody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+                    ObstaclePhysics.ApplyDebrisMaterial(shard.GetComponent<Collider>());
 
-                var debris = shard.AddComponent<VehicleDamageDebris>();
-                debris.Configure(8f);
+                    var debris = shard.AddComponent<VehicleDamageDebris>();
+                    debris.Configure(8f);
+                }
+
+                if (shard == null)
+                    continue;
 
                 spawnedDebris.Add(shard);
                 detachedCount++;
 
+                var shardRb = shard.GetComponent<Rigidbody>();
+                if (shardRb == null)
+                    continue;
+
                 var burstDir = (Random.onUnitSphere + impactNormal).normalized;
                 var force = Random.Range(2f, 5f) * (impactSpeed / heavyImpactSpeed);
-                shardBody.AddForce(burstDir * force, ForceMode.Impulse);
-                shardBody.AddTorque(Random.insideUnitSphere * force, ForceMode.Impulse);
+                shardRb.AddForce(burstDir * force, ForceMode.Impulse);
+                shardRb.AddTorque(Random.insideUnitSphere * force, ForceMode.Impulse);
             }
+        }
+
+        void TryEliminateFromCriticalDamage()
+        {
+            if (!damageProfile.DemolitionWinCondition || racerProgress == null)
+                return;
+
+            if (AttachedPartRatio > 0.35f)
+                return;
+
+            if (raceManager == null)
+                raceManager = FindAnyObjectByType<RaceManager>();
+
+            raceManager?.EliminateRacer(racerProgress);
         }
 
         bool ShouldApplyDamage(Collider other)
@@ -248,6 +362,9 @@ namespace NeonLap.Vehicle
                 return false;
 
             if (CollisionHazardUtility.IsDebris(other))
+                return false;
+
+            if (other.GetComponentInParent<RollingBarrelImpact>() != null)
                 return false;
 
             if (CollisionHazardUtility.IsHazard(other, this))
@@ -262,13 +379,21 @@ namespace NeonLap.Vehicle
         {
             for (var i = spawnedDebris.Count - 1; i >= 0; i--)
             {
-                if (spawnedDebris[i] != null)
-                    Destroy(spawnedDebris[i]);
+                var debris = spawnedDebris[i];
+                if (debris == null)
+                    continue;
+
+                var poolable = debris.GetComponent<VehicleDamageDebris>();
+                if (poolable != null && VehicleDamageDebrisPool.Instance != null)
+                    VehicleDamageDebrisPool.Instance.Release(debris);
+                else
+                    Destroy(debris);
             }
 
             spawnedDebris.Clear();
             detachedCount = 0;
             lastDetachTime = 0f;
+            initialPartCount = 0;
 
             if (visualRoot != null)
                 Destroy(visualRoot.gameObject);

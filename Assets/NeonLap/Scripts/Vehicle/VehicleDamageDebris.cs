@@ -13,11 +13,28 @@ namespace NeonLap.Vehicle
         Renderer[] renderers;
         float spawnTime;
         bool colliderDisabled;
+        VehicleDamageDebrisPool ownerPool;
+        bool pooled;
 
         public void Configure(float debrisLifetime = 10f)
         {
             lifetime = debrisLifetime;
             spawnTime = Time.time;
+            pooled = false;
+        }
+
+        public void ConfigureForPool(VehicleDamageDebrisPool pool)
+        {
+            ownerPool = pool;
+            pooled = true;
+        }
+
+        public void ActivateFromPool(float debrisLifetime)
+        {
+            lifetime = debrisLifetime;
+            spawnTime = Time.time;
+            colliderDisabled = false;
+            pooled = true;
         }
 
         void Awake()
@@ -65,6 +82,14 @@ namespace NeonLap.Vehicle
             }
 
             if (age >= lifetime)
+                Release();
+        }
+
+        void Release()
+        {
+            if (pooled && ownerPool != null)
+                ownerPool.Release(gameObject);
+            else
                 Destroy(gameObject);
         }
 

@@ -1,3 +1,4 @@
+using NeonLap.Core;
 using NeonLap.Race;
 using UnityEngine;
 
@@ -10,11 +11,14 @@ namespace NeonLap.Vehicle
         RaceManager raceManager;
         float fuelRemaining;
         bool depleting;
+        bool infiniteFuel;
+
+        public bool IsInfinite => infiniteFuel;
 
         public float NormalizedFuel =>
             tankDuration <= 0.01f ? 0f : Mathf.Clamp01(fuelRemaining / tankDuration);
 
-        public bool IsEmpty => fuelRemaining <= 0.01f;
+        public bool IsEmpty => !infiniteFuel && fuelRemaining <= 0.01f;
 
         public void Configure(float duration, RaceManager manager)
         {
@@ -23,6 +27,13 @@ namespace NeonLap.Vehicle
 
             raceManager = manager;
             ResetTank();
+        }
+
+        public void SetInfinite(bool infinite)
+        {
+            infiniteFuel = infinite;
+            if (infinite)
+                fuelRemaining = tankDuration;
         }
 
         public void ResetTank()
@@ -40,6 +51,27 @@ namespace NeonLap.Vehicle
             return true;
         }
 
+        public bool RefillFromPad()
+        {
+            if (infiniteFuel)
+                return false;
+
+            if (NormalizedFuel <= GameFuelEconomy.LowFuelPadFullThreshold)
+                fuelRemaining = tankDuration;
+            else
+                AddFuelFraction(GameFuelEconomy.FuelPadRefillFraction);
+
+            return true;
+        }
+
+        public void AddFuelFraction(float fraction)
+        {
+            if (infiniteFuel || fraction <= 0f)
+                return;
+
+            fuelRemaining = Mathf.Min(tankDuration, fuelRemaining + tankDuration * fraction);
+        }
+
         void Awake()
         {
             raceManager ??= FindAnyObjectByType<RaceManager>();
@@ -48,6 +80,9 @@ namespace NeonLap.Vehicle
 
         void Update()
         {
+            if (raceManager == null)
+                raceManager = FindAnyObjectByType<RaceManager>();
+
             if (raceManager == null)
                 return;
 
@@ -64,7 +99,8 @@ namespace NeonLap.Vehicle
                         fuelRemaining = tankDuration;
                     }
 
-                    fuelRemaining = Mathf.Max(0f, fuelRemaining - Time.deltaTime);
+                    if (!infiniteFuel)
+                        fuelRemaining = Mathf.Max(0f, fuelRemaining - Time.deltaTime);
                     break;
             }
         }

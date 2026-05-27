@@ -24,5 +24,26 @@ namespace NeonLap.Core
         {
             return enabled ? "ON" : "OFF";
         }
+
+        /// <summary>
+        /// Whether optional police chase can spawn for the active race mode.
+        /// Time Trial / Ghost Duel use <see cref="TimeTrialSettings.PoliceEnabled"/> instead of the global toggle.
+        /// </summary>
+        public static bool IsActiveForCurrentRace()
+        {
+            if (GameRaceModeSettings.IsChase)
+                return true;
+
+            if (GameRaceModeSettings.IsPractice)
+                return false;
+
+            if (GameRaceModeSettings.IsTimeTrial || GameRaceModeSettings.IsGhostDuel)
+            {
+                TimeTrialSettings.Load();
+                return TimeTrialSettings.PoliceEnabled;
+            }
+
+            return Enabled;
+        }
     }
 }

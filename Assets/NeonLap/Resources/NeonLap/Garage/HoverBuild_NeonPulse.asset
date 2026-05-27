@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7f8e9d0c1b2a39485766554433221100, type: 3}
+  m_Name: HoverBuild_NeonPulse
+  m_EditorClassIdentifier: 
+  buildId: neon_pulse
+  displayName: Neon Pulse
+  tagline: Balanced all-rounder for any mode.
+  profile: {fileID: 11400000, guid: d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a0, type: 2}
+  bodyColor: {r: 0.1, g: 0.35, b: 0.45, a: 1}
+  accentColor: {r: 0, g: 3.5, b: 4, a: 1}
+  vehicleClass: 0
+  unlockedByDefault: 1
+  requiredCareerStars: 0
+  requiredScoreAttackBest: 0
+  creditCost: 0

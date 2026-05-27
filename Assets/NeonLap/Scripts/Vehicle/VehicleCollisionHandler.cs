@@ -41,6 +41,10 @@ namespace NeonLap.Vehicle
             if (IsSoftVehicleCollision(collision))
                 return;
 
+            var shield = GetComponent<VehicleCombatShield>();
+            if (shield != null && shield.TryAbsorbHit())
+                return;
+
             var contact = collision.GetContact(0);
             var intoSurface = Vector3.Dot(rb.linearVelocity, contact.normal);
             if (intoSurface >= -0.35f)
@@ -68,6 +72,13 @@ namespace NeonLap.Vehicle
         {
             if (collision.contactCount == 0)
                 return;
+
+            var shield = GetComponent<VehicleCombatShield>();
+            if (shield != null && shield.TryAbsorbHit())
+                return;
+
+            var impactSpeed = collision.relativeVelocity.magnitude;
+            GetComponent<VehicleHapticsController>()?.PulseCollision(impactSpeed);
 
             var isVehicle = collision.collider.gameObject.layer == NeonLapLayers.Vehicle;
             var damping = isVehicle ? vehicleImpactDamping : impactDamping;

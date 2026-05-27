@@ -6,7 +6,7 @@ namespace NeonLap.VFX
     {
         static readonly int EmissionColorId = Shader.PropertyToID("_EmissionColor");
 
-        [SerializeField] float flashInterval = 0.18f;
+        [SerializeField] float flashInterval = 0.11f;
 
         Renderer leftLight;
         Renderer rightLight;
@@ -54,8 +54,8 @@ namespace NeonLap.VFX
 
         void ApplyFlashState()
         {
-            SetLight(leftMaterial, leftActive, new Color(4.5f, 0.15f, 0.15f), new Color(0.35f, 0.04f, 0.04f));
-            SetLight(rightMaterial, !leftActive, new Color(0.15f, 0.35f, 4.5f), new Color(0.04f, 0.08f, 0.35f));
+            SetLight(leftMaterial, leftActive, new Color(5.5f, 0.12f, 0.12f), new Color(0.25f, 0.03f, 0.03f));
+            SetLight(rightMaterial, !leftActive, new Color(0.12f, 0.4f, 5.5f), new Color(0.03f, 0.06f, 0.25f));
         }
 
         static void SetLight(Material material, bool active, Color activeEmission, Color inactiveEmission)

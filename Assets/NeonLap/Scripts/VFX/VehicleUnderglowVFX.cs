@@ -1,3 +1,4 @@
+using NeonLap.Race;
 using UnityEngine;
 
 namespace NeonLap.VFX
@@ -26,10 +27,19 @@ namespace NeonLap.VFX
         readonly System.Collections.Generic.List<Light> groundLights = new();
 
         float colorPhase;
+        bool useFixedColor;
+        Color fixedColor;
 
         void Awake()
         {
             BuildUnderglow();
+
+            var racer = GetComponentInParent<RacerProgress>();
+            if (racer != null && racer.IsPlayer)
+            {
+                fixedColor = VehicleUnderglowUnlockStore.GetSelectedColor();
+                useFixedColor = true;
+            }
         }
 
         void Update()
@@ -42,7 +52,7 @@ namespace NeonLap.VFX
                 colorPhase -= Palette.Length;
 
             var pulse = 1f + Mathf.Sin(Time.time * pulseSpeed) * pulseAmount;
-            var color = SamplePalette(colorPhase);
+            var color = useFixedColor ? fixedColor : SamplePalette(colorPhase);
             var emission = color * (stripEmission * pulse);
 
             for (var i = 0; i < stripMaterials.Count; i++)

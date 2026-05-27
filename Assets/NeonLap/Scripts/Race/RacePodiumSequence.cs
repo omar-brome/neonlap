@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using NeonLap.Audio;
 using NeonLap.Camera;
 using NeonLap.Track;
 using NeonLap.UI;
@@ -32,6 +33,8 @@ namespace NeonLap.Race
         bool awaitingPodiumDismiss;
         int pendingPlayerPlacement;
         float podiumCelebrationStartTime;
+
+        public bool IsAwaitingDismiss => awaitingPodiumDismiss;
 
         public void Configure(
             RaceManager manager,
@@ -71,18 +74,38 @@ namespace NeonLap.Race
             if (!awaitingPodiumDismiss)
                 return;
 
-            if (Time.time - podiumCelebrationStartTime >= PodiumAutoContinueDelay)
+            var photoMode = FindAnyObjectByType<PhotoModeController>();
+            if (photoMode != null && photoMode.IsActive)
+            {
+                RefreshPodiumHintWithCountdown();
+                return;
+            }
+
+            // Use unscaled time so photo mode (timeScale=0) doesn't stall auto-continue.
+            if (Time.unscaledTime - podiumCelebrationStartTime >= PodiumAutoContinueDelay)
             {
                 ShowFinishMenu();
                 return;
             }
 
+            RefreshPodiumHintWithCountdown();
+
             var keyboard = Keyboard.current;
             if (keyboard == null)
                 return;
 
-            if (keyboard.enterKey.wasPressedThisFrame || keyboard.escapeKey.wasPressedThisFrame)
+            if (keyboard.enterKey.wasPressedThisFrame)
                 ShowFinishMenu();
+        }
+
+        void RefreshPodiumHintWithCountdown()
+        {
+            var remaining = Mathf.CeilToInt(
+                Mathf.Max(0f, PodiumAutoContinueDelay - (Time.unscaledTime - podiumCelebrationStartTime)));
+            var playerOnPodium = pendingPlayerPlacement <= 3;
+            ShowPodiumHint(playerOnPodium
+                ? $"P PHOTO  •  SPACE JUMP  •  ENTER ({remaining}s)"
+                : $"P PHOTO  •  ENTER ({remaining}s)");
         }
 
         void Subscribe()
@@ -122,10 +145,21 @@ namespace NeonLap.Race
 
             raceUi?.SetGameplayHudVisible(false);
 
-            if (replaySystem != null && replaySystem.HasRecording)
-                yield return replaySystem.PlayHighlightReplay();
+            if (playerPlacement == 1 && replaySystem != null && replaySystem.HasRecording)
+                yield return PlayP1SlowmoThenReplay();
+            else if (replaySystem != null && replaySystem.HasRecording)
+                yield return replaySystem.PlayBestOvertakeReplay();
 
             yield return PlayPodiumSequence(playerPlacement);
+        }
+
+        IEnumerator PlayP1SlowmoThenReplay()
+        {
+            var previousScale = Time.timeScale;
+            Time.timeScale = 0.3f;
+            yield return new WaitForSecondsRealtime(1f);
+            Time.timeScale = previousScale > 0.01f ? previousScale : 1f;
+            yield return replaySystem.PlayBestOvertakeReplay();
         }
 
         IEnumerator PlayPodiumSequence(int playerPlacement)
@@ -182,12 +216,11 @@ namespace NeonLap.Race
         {
             HideFinishMenu();
             awaitingPodiumDismiss = true;
-            podiumCelebrationStartTime = Time.time;
+            podiumCelebrationStartTime = Time.unscaledTime;
+            DynamicRaceMusicController.Instance?.EnterPodium();
 
             var playerOnPodium = playerPlacement <= 3;
-            ShowPodiumHint(playerOnPodium
-                ? "PRESS SPACE TO JUMP  •  ENTER TO CONTINUE"
-                : "ENTER TO CONTINUE");
+            RefreshPodiumHintWithCountdown();
 
             StartFireworks();
 
@@ -237,6 +270,7 @@ namespace NeonLap.Race
             HidePodiumHint();
             DisablePodiumCelebration();
             StopFireworks();
+            DynamicRaceMusicController.Instance?.ExitPodium();
 
             raceUi?.SetGameplayHudVisible(false);
             raceUi?.ShowFinishPanel();

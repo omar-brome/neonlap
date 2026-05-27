@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using NeonLap.Core;
@@ -32,6 +33,28 @@ namespace NeonLap.Vehicle
         readonly List<GameObject> activeUnits = new();
         bool spawnAttempted;
         bool subscribed;
+        bool outrunMode;
+
+        public event Action PoliceUnitsSpawned;
+        public bool HasActiveUnits => activeUnits.Count > 0;
+        public IReadOnlyList<GameObject> ActiveUnits => activeUnits;
+
+        public void SetOutrunMode(bool enabled)
+        {
+            outrunMode = enabled;
+            if (!enabled)
+                return;
+
+            spawnChance = 1f;
+            spawnDelayMin = 2f;
+            spawnDelayMax = 5f;
+            minUnits = 2;
+            maxUnits = 3;
+            spawnAttempted = false;
+
+            if (raceManager != null && raceManager.State == RaceState.Racing && isActiveAndEnabled)
+                StartCoroutine(TrySpawnPoliceDelayed());
+        }
 
         public void Configure(
             RaceManager manager,
@@ -98,24 +121,30 @@ namespace NeonLap.Vehicle
 
             spawnAttempted = true;
 
-            GamePoliceSettings.Load();
-            if (!GamePoliceSettings.Enabled)
+            if (!outrunMode)
+            {
+                GamePoliceSettings.Load();
+                if (!GamePoliceSettings.IsActiveForCurrentRace())
+                    yield break;
+            }
+
+            if (UnityEngine.Random.value > spawnChance)
                 yield break;
 
-            if (Random.value > spawnChance)
-                yield break;
-
-            yield return new WaitForSeconds(Random.Range(spawnDelayMin, spawnDelayMax));
+            yield return new WaitForSeconds(UnityEngine.Random.Range(spawnDelayMin, spawnDelayMax));
 
             if (raceManager == null || raceManager.State != RaceState.Racing)
                 yield break;
 
-            var count = Random.Range(minUnits, maxUnits + 1);
+            var count = UnityEngine.Random.Range(minUnits, maxUnits + 1);
             for (var i = 0; i < count; i++)
             {
                 SpawnPoliceUnit(i);
                 yield return new WaitForSeconds(1.2f);
             }
+
+            if (activeUnits.Count > 0)
+                PoliceUnitsSpawned?.Invoke();
         }
 
         void SpawnPoliceUnit(int index)
@@ -147,10 +176,18 @@ namespace NeonLap.Vehicle
             var lights = car.AddComponent<PoliceLightBarVFX>();
             lights.Configure(car.transform.Find("Visual"));
 
+            var roofSiren = car.AddComponent<PoliceRoofSirenVFX>();
+            roofSiren.Build(car.transform.Find("Visual"));
+
             var spawn = GetSpawnPosition(index);
             car.transform.SetPositionAndRotation(spawn.position, spawn.rotation);
             rb.linearVelocity = spawn.rotation * Vector3.forward * 8f;
             car.SetActive(true);
+
+            var oldMarker = car.transform.Find("HazardMarker");
+            if (oldMarker != null)
+                Destroy(oldMarker.gameObject);
+
             activeUnits.Add(car);
         }
 
@@ -190,12 +227,37 @@ namespace NeonLap.Vehicle
 
             CreatePolicePart(visual, "PoliceLightBar", new Vector3(0f, 0.48f, -0.08f), new Vector3(0.72f, 0.08f, 0.24f),
                 barMat);
-            CreatePolicePart(visual, "PoliceLightL", new Vector3(-0.18f, 0.48f, -0.08f), new Vector3(0.18f, 0.09f, 0.18f),
+            CreatePolicePart(visual, "PoliceLightL", new Vector3(-0.18f, 0.48f, -0.08f), new Vector3(0.16f, 0.07f, 0.16f),
                 redMat);
-            CreatePolicePart(visual, "PoliceLightR", new Vector3(0.18f, 0.48f, -0.08f), new Vector3(0.18f, 0.09f, 0.18f),
+            CreatePolicePart(visual, "PoliceLightR", new Vector3(0.18f, 0.48f, -0.08f), new Vector3(0.16f, 0.07f, 0.16f),
                 blueMat);
             CreatePolicePart(visual, "PoliceBadge", new Vector3(0f, 0.28f, 1.05f), new Vector3(0.28f, 0.08f, 0.04f),
                 barMat);
+        }
+
+        public bool TryGetClosestUnit(Vector3 worldPosition, out Transform unitTransform, out float distance)
+        {
+            unitTransform = null;
+            distance = float.MaxValue;
+
+            for (var i = activeUnits.Count - 1; i >= 0; i--)
+            {
+                var unit = activeUnits[i];
+                if (unit == null)
+                {
+                    activeUnits.RemoveAt(i);
+                    continue;
+                }
+
+                var d = Vector3.Distance(worldPosition, unit.transform.position);
+                if (d >= distance)
+                    continue;
+
+                distance = d;
+                unitTransform = unit.transform;
+            }
+
+            return unitTransform != null;
         }
 
         static void CreatePolicePart(Transform parent, string name, Vector3 localPosition, Vector3 localScale,
@@ -206,7 +268,7 @@ namespace NeonLap.Vehicle
             part.transform.SetParent(parent, false);
             part.transform.localPosition = localPosition;
             part.transform.localScale = localScale;
-            Object.Destroy(part.GetComponent<Collider>());
+            UnityEngine.Object.Destroy(part.GetComponent<Collider>());
             part.GetComponent<Renderer>().sharedMaterial = material;
         }
     }

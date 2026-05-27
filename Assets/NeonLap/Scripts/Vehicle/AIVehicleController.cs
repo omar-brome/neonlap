@@ -1,5 +1,8 @@
 using NeonLap.Core;
+using NeonLap.Environment;
 using NeonLap.Race;
+using NeonLap.VFX;
+using NeonLap.Track;
 using UnityEngine;
 
 namespace NeonLap.Vehicle
@@ -25,13 +28,27 @@ namespace NeonLap.Vehicle
         float rivalSpeedMultiplier = 1f;
         float rubberBandCatchUpScale = 1f;
         float rubberBandSlowdownScale = 0.35f;
+        float progressRubberBandStrength;
+        float progressAheadSlowdownScale;
+        float progressBehindCatchUpScale;
         float steerResponseDivisor = 55f;
         float cornerSpeedMin = 0.28f;
         float cornerAccelMin = 0.25f;
+        bool seeksNitroPickups;
+        float centeringWeightMult = 1f;
+        float passingSteerBias;
+        float lastUpcomingTurnAngle;
+        float playerBlockEndTime;
+        float zoneHoverForceMultiplier = 1f;
+        float zoneTrackHalfWidthMultiplier = 1f;
         RaceManager raceManager;
+        RacerProgress racerProgress;
+        VehicleNitroBoost nitroBoost;
+        bool hasElevationTrack;
 
         public bool IsBraking { get; private set; }
         public float SteerInput { get; private set; }
+        public float EstimatedUpcomingTurnAngle => lastUpcomingTurnAngle;
 
         void Awake()
         {
@@ -39,8 +56,16 @@ namespace NeonLap.Vehicle
             groundProbe = GetComponent<VehicleGroundProbe>();
             hoverPodSystem = GetComponent<VehicleHoverPodSystem>();
             slipEffect = GetComponent<VehicleSlipEffect>();
+            racerProgress = GetComponent<RacerProgress>();
+            nitroBoost = GetComponent<VehicleNitroBoost>();
             rb.interpolation = RigidbodyInterpolation.Interpolate;
             rb.centerOfMass = new Vector3(0f, -0.4f, 0f);
+        }
+
+        void Start()
+        {
+            var track = GameManager.Instance != null ? GameManager.Instance.GetCurrentTrackDefinition() : null;
+            hasElevationTrack = track != null && TrackLayoutUtility.HasElevation(track.layout);
         }
 
         void FixedUpdate()
@@ -80,9 +105,29 @@ namespace NeonLap.Vehicle
             playerTarget = player;
         }
 
+        public void ActivatePlayerBlock(float durationSeconds)
+        {
+            if (durationSeconds <= 0f)
+                return;
+
+            playerBlockEndTime = Mathf.Max(playerBlockEndTime, Time.time + durationSeconds);
+        }
+
+        public bool IsBlockingPlayer => playerTarget != null && Time.time < playerBlockEndTime;
+
         public void ConfigureTrack(float halfWidth)
         {
             trackHalfWidth = Mathf.Max(halfWidth, 4f);
+        }
+
+        public void SetZoneHoverForceMultiplier(float multiplier)
+        {
+            zoneHoverForceMultiplier = Mathf.Clamp(multiplier, 0.2f, 1.5f);
+        }
+
+        public void SetZoneTrackHalfWidthMultiplier(float multiplier)
+        {
+            zoneTrackHalfWidthMultiplier = Mathf.Clamp(multiplier, 0.35f, 1f);
         }
 
         public void SetRivalVariation(int waypointOffset, float speedMultiplier)
@@ -98,16 +143,31 @@ namespace NeonLap.Vehicle
             rubberBandStrength = preset.RubberBandStrength;
             rubberBandCatchUpScale = preset.RubberBandCatchUpScale;
             rubberBandSlowdownScale = preset.RubberBandSlowdownScale;
+            progressRubberBandStrength = preset.ProgressRubberBandStrength;
+            progressAheadSlowdownScale = preset.ProgressAheadSlowdownScale;
+            progressBehindCatchUpScale = preset.ProgressBehindCatchUpScale;
             lookAheadMin = preset.LookAheadMin;
             lookAheadMax = preset.LookAheadMax;
             steerResponseDivisor = Mathf.Max(preset.SteerResponseDivisor, 20f);
             cornerSpeedMin = Mathf.Clamp(preset.CornerSpeedMin, 0.1f, 0.6f);
             cornerAccelMin = Mathf.Clamp(preset.CornerAccelMin, 0.1f, 0.6f);
+            seeksNitroPickups = preset.AiSeeksNitroPickups;
+        }
+
+        public void ApplyPersonality(AIPersonalityProfile profile)
+        {
+            lookAheadMin *= profile.LookAheadMultiplier;
+            lookAheadMax *= profile.LookAheadMultiplier;
+            cornerSpeedMin = Mathf.Clamp(cornerSpeedMin * profile.CornerSpeedMultiplier, 0.1f, 0.65f);
+            cornerAccelMin = Mathf.Clamp(cornerAccelMin * profile.CornerAccelMultiplier, 0.1f, 0.65f);
+            steerResponseDivisor = Mathf.Max(steerResponseDivisor / Mathf.Max(profile.SteerAggression, 0.5f), 20f);
+            centeringWeightMult = profile.CenteringWeight;
+            passingSteerBias = profile.PassingSteerBias;
         }
 
         public bool IsOffTrack()
         {
-            return GetLateralDistanceFromPath() > trackHalfWidth * 0.85f;
+            return GetLateralDistanceFromPath() > GetEffectiveTrackHalfWidth() * 0.85f;
         }
 
         public void RecoverToTrack()
@@ -136,19 +196,62 @@ namespace NeonLap.Vehicle
 
         void UpdateRubberBand()
         {
+            var distanceMultiplier = ComputeDistanceRubberBand();
+            var progressMultiplier = ComputeProgressRubberBand();
+            targetSpeedMultiplier = distanceMultiplier * progressMultiplier;
+        }
+
+        float ComputeDistanceRubberBand()
+        {
             if (playerTarget == null)
-            {
-                targetSpeedMultiplier = 1f;
-                return;
-            }
+                return 1f;
 
             var dist = Vector3.Distance(transform.position, playerTarget.position);
             if (dist > 45f)
-                targetSpeedMultiplier = 1f + rubberBandStrength * rubberBandCatchUpScale;
-            else if (dist < 18f)
-                targetSpeedMultiplier = 1f - rubberBandStrength * rubberBandSlowdownScale;
-            else
-                targetSpeedMultiplier = 1f;
+                return 1f + rubberBandStrength * rubberBandCatchUpScale;
+            if (dist < 18f)
+                return 1f - rubberBandStrength * rubberBandSlowdownScale;
+            return 1f;
+        }
+
+        float ComputeProgressRubberBand()
+        {
+            if (progressRubberBandStrength <= 0.001f)
+                return 1f;
+
+            if (raceManager == null)
+                raceManager = FindAnyObjectByType<RaceManager>();
+
+            if (raceManager == null || racerProgress == null)
+                return 1f;
+
+            var playerRacer = raceManager.PlayerRacer;
+            if (playerRacer == null)
+                return 1f;
+
+            var aiProgress = raceManager.GetRaceProgress(racerProgress);
+            var playerProgress = raceManager.GetRaceProgress(playerRacer);
+            var delta = aiProgress - playerProgress;
+            const float progressSpan = 0.12f;
+
+            if (delta > 0.02f)
+            {
+                var aheadAmount = Mathf.Clamp01(delta / progressSpan);
+                return 1f - progressRubberBandStrength * progressAheadSlowdownScale * aheadAmount;
+            }
+
+            if (delta < -0.02f)
+            {
+                var behindAmount = Mathf.Clamp01(-delta / progressSpan);
+                var catchUpScale = progressBehindCatchUpScale;
+                var ghost = CatchUpGhostController.Instance;
+                if (ghost != null && ghost.IsActive)
+                    catchUpScale *= ghost.RubberBandDampScaleWhenActive;
+
+                return 1f + progressRubberBandStrength * catchUpScale * behindAmount;
+            }
+
+            return 1f;
         }
 
         void DriveTowardWaypoint()
@@ -156,6 +259,7 @@ namespace NeonLap.Vehicle
             AdvanceWaypointIfReached();
 
             var lookAhead = GetLookAheadPoint(out var upcomingTurnAngle);
+            lastUpcomingTurnAngle = upcomingTurnAngle;
             var toTarget = lookAhead - transform.position;
             toTarget.y = 0f;
 
@@ -169,11 +273,17 @@ namespace NeonLap.Vehicle
             var turnAngle = Mathf.Max(upcomingTurnAngle, headingError);
             var cornerSpeedFactor = ComputeCornerSpeedFactor(turnAngle);
             var podMultiplier = hoverPodSystem != null ? hoverPodSystem.SpeedMultiplier : 1f;
+            var nitroMultiplier = nitroBoost != null ? nitroBoost.ActiveSpeedMultiplier : 1f;
             var maxSpeed = profile.maxSpeed * targetSpeedMultiplier * rivalSpeedMultiplier * aiSpeedScale *
-                           cornerSpeedFactor * podMultiplier;
+                           cornerSpeedFactor * podMultiplier * nitroMultiplier * GetWeatherTopSpeedMultiplier();
+            if (hasElevationTrack && rb != null && rb.linearVelocity.y > 0.65f)
+                maxSpeed *= 0.88f; // slower on climbs
 
             var steer = ComputeSteer(toTarget);
             steer += ComputeTrackCenteringSteer();
+            steer += ComputePassingSteer();
+            steer += ComputeBlockingSteer();
+            steer += ComputeNitroSeekSteer();
             steer = Mathf.Clamp(steer, -1f, 1f);
 
             if (!probe.IsGrounded)
@@ -274,10 +384,50 @@ namespace NeonLap.Vehicle
             return Mathf.Clamp(Vector3.SignedAngle(forward, desiredDir, Vector3.up) / steerResponseDivisor, -1f, 1f);
         }
 
+        float GetEffectiveTrackHalfWidth()
+        {
+            var width = trackHalfWidth * zoneTrackHalfWidthMultiplier;
+            return IsBlockingPlayer ? width * 1.45f : width;
+        }
+
+        float ComputeNitroSeekSteer()
+        {
+            if (!seeksNitroPickups || lastUpcomingTurnAngle > 24f)
+                return 0f;
+
+            if (!NitroPickupRegistry.TryGetNearestAvailable(transform.position, 40f, out var pickupPosition))
+                return 0f;
+
+            var toPickup = pickupPosition - transform.position;
+            toPickup.y = 0f;
+            if (toPickup.sqrMagnitude < 9f || toPickup.sqrMagnitude > 1600f)
+                return 0f;
+
+            var forward = transform.forward;
+            forward.y = 0f;
+            return Mathf.Clamp(Vector3.SignedAngle(forward, toPickup.normalized, Vector3.up) / steerResponseDivisor,
+                -0.42f, 0.42f);
+        }
+
+        float ComputeBlockingSteer()
+        {
+            if (!IsBlockingPlayer || playerTarget == null)
+                return 0f;
+
+            var toPlayer = playerTarget.position - transform.position;
+            toPlayer.y = 0f;
+            if (toPlayer.sqrMagnitude > 625f || toPlayer.sqrMagnitude < 25f)
+                return 0f;
+
+            var lateral = Vector3.Dot(transform.right, toPlayer.normalized);
+            return Mathf.Clamp(lateral * 3.2f, -0.9f, 0.9f);
+        }
+
         float ComputeTrackCenteringSteer()
         {
+            var halfWidth = GetEffectiveTrackHalfWidth();
             var lateralDistance = GetLateralDistanceFromPath();
-            if (lateralDistance < trackHalfWidth * 0.3f)
+            if (lateralDistance < halfWidth * 0.3f)
                 return 0f;
 
             var (closestPoint, _) = GetClosestPathSegment();
@@ -286,9 +436,23 @@ namespace NeonLap.Vehicle
             if (toCenter.sqrMagnitude < 0.01f)
                 return 0f;
 
-            var weight = Mathf.InverseLerp(trackHalfWidth * 0.3f, trackHalfWidth * 0.8f, lateralDistance);
+            var weight = Mathf.InverseLerp(halfWidth * 0.3f, halfWidth * 0.8f, lateralDistance);
             var centerSteer = Vector3.SignedAngle(transform.forward, toCenter.normalized, Vector3.up) / steerResponseDivisor;
-            return Mathf.Clamp(centerSteer, -1f, 1f) * weight;
+            return Mathf.Clamp(centerSteer, -1f, 1f) * weight * centeringWeightMult;
+        }
+
+        float ComputePassingSteer()
+        {
+            if (Mathf.Abs(passingSteerBias) < 0.001f || playerTarget == null)
+                return 0f;
+
+            var toPlayer = playerTarget.position - transform.position;
+            toPlayer.y = 0f;
+            if (toPlayer.sqrMagnitude > 576f || toPlayer.sqrMagnitude < 36f)
+                return 0f;
+
+            var lateral = Vector3.Dot(transform.right, toPlayer.normalized);
+            return Mathf.Clamp(lateral * passingSteerBias * 2.5f, -0.35f, 0.35f);
         }
 
         float GetLateralDistanceFromPath()
@@ -357,7 +521,8 @@ namespace NeonLap.Vehicle
                 return;
 
             var error = profile.hoverHeight - probe.Distance;
-            var force = Vector3.up * (error * profile.hoverForce - rb.linearVelocity.y * profile.hoverDamping);
+            var hoverForce = profile.hoverForce * zoneHoverForceMultiplier;
+            var force = Vector3.up * (error * hoverForce - rb.linearVelocity.y * profile.hoverDamping);
             rb.AddForce(force, ForceMode.Acceleration);
         }
 
@@ -372,11 +537,13 @@ namespace NeonLap.Vehicle
             var speed = Vector3.Dot(rb.linearVelocity, forward);
             var accelScale = Mathf.Lerp(1f, cornerAccelMin, Mathf.Clamp01(turnAngle / 70f));
             var podMultiplier = hoverPodSystem != null ? hoverPodSystem.SpeedMultiplier : 1f;
+            var nitroAccel = nitroBoost != null ? nitroBoost.ActiveAccelerationMultiplier : 1f;
 
             if (speed < maxSpeed - 1.5f)
             {
                 IsBraking = false;
-                rb.AddForce(forward * (profile.acceleration * accelScale * podMultiplier), ForceMode.Acceleration);
+                rb.AddForce(forward * (profile.acceleration * accelScale * podMultiplier * nitroAccel),
+                    ForceMode.Acceleration);
             }
             else if (speed > maxSpeed)
             {
@@ -409,7 +576,7 @@ namespace NeonLap.Vehicle
 
             var forward = transform.forward;
             var lateral = rb.linearVelocity - forward * Vector3.Dot(rb.linearVelocity, forward);
-            var gripScale = slipEffect != null ? slipEffect.GripMultiplier : 1f;
+            var gripScale = (slipEffect != null ? slipEffect.GripMultiplier : 1f) * GetWeatherGripMultiplier();
             rb.AddForce(-lateral * profile.grip * gripScale, ForceMode.Acceleration);
         }
 
@@ -420,6 +587,18 @@ namespace NeonLap.Vehicle
 
             var targetRotation = Quaternion.FromToRotation(transform.up, probe.GroundNormal) * rb.rotation;
             rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, 8f * Time.fixedDeltaTime));
+        }
+
+        static float GetWeatherGripMultiplier()
+        {
+            var weather = DynamicWeatherSystem.Instance;
+            return weather != null ? weather.GripMultiplier : 1f;
+        }
+
+        static float GetWeatherTopSpeedMultiplier()
+        {
+            var weather = DynamicWeatherSystem.Instance;
+            return weather != null ? weather.TopSpeedMultiplier : 1f;
         }
     }
 }

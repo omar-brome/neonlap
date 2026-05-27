@@ -1,6 +1,6 @@
 # NeonLap
 
-An arcade **neon hover-racing** game built in **Unity 6** with the **Universal Render Pipeline (URP)**. Race a 10-car grid around a procedurally generated oval track, complete **3 laps**, and fight for **1st place** against AI rivals.
+An arcade **neon hover-racing** game built in **Unity 6** with the **Universal Render Pipeline (URP)**. Race on **seven** procedural layouts, earn **career** medals and stars, run **time trials** against your ghost, dodge **police** in Outrun (or optional TT chase), and chase high scores across multiple modes.
 
 ![Unity](https://img.shields.io/badge/Unity-6000.4.6f1-blue)
 ![URP](https://img.shields.io/badge/Render_Pipeline-URP-green)
@@ -10,16 +10,42 @@ An arcade **neon hover-racing** game built in **Unity 6** with the **Universal R
 
 ## Features
 
-- **Arcade hover physics** — raycast grounding, grip, drift, and speed-capped steering
-- **Procedural oval track** — runtime-built closed loop with straights, turns, barriers, and colliders
-- **10-car grid** — 1 player + 9 AI opponents, each with a unique neon color
-- **3-lap race flow** — countdown (3…2…1…GO!), lap timers, best lap, finish screen
-- **Placement system** — **YOU WON!** on 1st place, or **RACE FINISHED** with your final position
-- **Rubber-band AI** — rivals follow dense track waypoints with speed variation
-- **Visual polish** — neon materials, fog, drift trails, exhaust smoke, low-poly hover car meshes
-- **Full UI flow** — main menu, controls screen, in-race HUD, pause menu
-- **Keyboard + gamepad** — New Input System with WASD and arrow keys
-- **Data-driven tuning** — `VehicleProfile` and `TrackDefinition` ScriptableObjects
+### Core driving
+- **Arcade hover physics** — grounding, grip, drift, barrel rolls, nitro boost
+- **Fuel strategy** (career / grid modes) — lap-scaled tank, **fuel pads**, nitro refuel; empty tank stops acceleration. **Time Trial** uses infinite fuel (gauge hidden).
+- **10-car grid** — player + AI rivals with personality profiles and rubber-band pacing (TT can add 0–3 rivals)
+- **Weather** — dynamic rain/sun; lower grip in rain, higher drift score risk/reward
+
+### Race modes
+| Mode | Description |
+|------|-------------|
+| **Career** | Up to **7 tracks** with distinct **visual themes** (city, dockyard, desert, mountains, beach), **reverse circuit** variant per layout (free “second track”), **Gold / Silver / Bronze** score medals, ★ unlocks, garage + credits, podium finish |
+| **Time Trial** | Solo clock, **ghost PB**, sector splits, optional **police chase**, **S/A/B time ranks** (not career medals) |
+| **Ghost Duel** | Head-to-head ghost rules; same TT settings (fuel off, optional police) |
+| **Elimination** | Last-place rivals eliminated each lap; **full** vehicle damage |
+| **Outrun / Chase** | Forced police heat; checkpoint & survival wins |
+| **Score Attack** | Timed scoring — drift, style, collisions, progress |
+| **Practice** | Infinite fuel, no police, casual damage |
+
+### Content & progression
+- **7 track layouts** — neon oval, turbo sprint, metro gauntlet, zigzag thunder, square circuit, ridge run (elevation), neon crossover (figure-8)
+- **Career medals** — score thresholds per track (G/S/B). **Time Trial ranks** — separate S/A/B vs your PB times.
+- **Garage** — tuning profiles (Balanced / Drift / Speed), underglow unlocks via career ★
+- **Pickups** — nitro, bananas (AI can drop), fuel pads
+- **Hazards** — track obstacles; editor **hazard paint** on waypoint indices
+- **Police chase** — career/custom toggle; **optional in Time Trial** (Game Settings)
+
+### Presentation
+- Main menu — mode strip, **career map** (7 nodes), lap count (1/2/3/5), difficulty, track browser, garage
+- Race HUD — fuel (hidden in TT), heat (Outrun), lap timer + **PB lap** column (TT), ghost ±delta, **TIME RANK** progress (TT), career medal progress (score modes)
+- **Photo mode** (P) on podium / after race, dynamic music layers, gamepad haptics, mobile touch UI
+- Finish flow — career medals + credits, **TIME RANK S/A/B** + PB lines (TT), style breakdown (labeled separately from career), podium sequence
+
+### Production services (offline-first)
+- **Prefab catalog** — optional `NeonLapContentCatalog` for artist-built cars (runtime fallback)
+- **Local JSON leaderboards** — `persistentDataPath/neonlap_leaderboards.json`
+- **Achievements** — `AchievementIds` + `RaceEventHub` for Steam/mobile SDK mapping
+- See [`docs/PRODUCTION.md`](docs/PRODUCTION.md) for Addressables & build checklist
 
 ---
 
@@ -31,26 +57,22 @@ An arcade **neon hover-racing** game built in **Unity 6** with the **Universal R
 | **Render Pipeline** | URP `17.4.0` |
 | **Input** | Input System `1.19.0` |
 
-Clone the repo and open the project folder in Unity Hub. Unity will restore packages from `Packages/manifest.json`.
+Clone the repo and open the project in Unity Hub. Packages restore from `Packages/manifest.json`.
 
 ---
 
 ## Quick Start
 
-### Option A — Full game flow (recommended)
-
+### Full game flow
 1. Open **`Assets/NeonLap/Scenes/MainMenu.unity`**
-2. Press **Play ▶**
-3. Click **START RACE**
+2. Press **Play**
+3. Pick a **mode**, **track**, **laps**, and **GO RACE**
 
-### Option B — Jump straight into a race
-
+### Direct race scene
 1. Open **`Assets/Scenes/SampleScene.unity`**
-2. Press **Play ▶**
+2. Press **Play**
 
-The race scene uses **`NeonLapSceneSetup`** on the **NeonLap** GameObject to build the track, spawn cars, wire the camera, UI, checkpoints, and AI at runtime.
-
-> **Tip:** Switch to the **Game** tab while playing. If both Play and Pause buttons are highlighted in the editor, the game is paused — click Pause once to resume.
+`NeonLapSceneSetup` on the **NeonLap** GameObject builds the track, spawns cars (prefab or runtime), wires camera, UI, checkpoints, AI, and mode controllers.
 
 ---
 
@@ -62,212 +84,163 @@ The race scene uses **`NeonLapSceneSetup`** on the **NeonLap** GameObject to bui
 | Brake / Reverse | `S` / `↓` | Left Trigger |
 | Steer | `A` / `D` or `←` / `→` | Left stick X |
 | Drift | `Space` | Right Bumper |
-| Reset car | `R` | Y (North) |
+| Barrel roll | (bound in Input Actions) | |
+| Reset / refuel (empty) | `R` | Y |
 | Pause | `Escape` | Start |
+| Photo mode | `P` (after race) | |
 
-Controls are also listed in the main menu under **CONTROLS**.
+Fuel pads and nitro refill fuel in **career** modes. Time Trial has no fuel drain. Full list: main menu **CONTROLS**.
 
-Input bindings live in:
-
-`Assets/NeonLap/Input/NeonLap_InputActions.inputactions`
+Input asset: `Assets/NeonLap/Input/NeonLap_InputActions.inputactions`
 
 ---
 
-## Scenes & Build Order
+## Scenes & build order
 
 | Scene | Path | Purpose |
 |-------|------|---------|
-| **MainMenu** | `Assets/NeonLap/Scenes/MainMenu.unity` | Title screen, controls, quit |
-| **SampleScene** | `Assets/Scenes/SampleScene.unity` | Race scene (track + cars built at runtime) |
+| **MainMenu** | `Assets/NeonLap/Scenes/MainMenu.unity` | Modes, garage, track select |
+| **SampleScene** | `Assets/Scenes/SampleScene.unity` | Race (runtime or prefab cars) |
 
-Build settings (scene 0 = first to load):
-
-1. `MainMenu`
-2. `SampleScene`
+Build settings: **MainMenu** first, then **SampleScene**.
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 neonlap/
 ├── Assets/
-│   ├── NeonLap/                    # All game code & content
-│   │   ├── Input/                  # Input Actions asset
-│   │   ├── Materials/              # URP neon materials
-│   │   ├── Scenes/                 # MainMenu.unity
-│   │   ├── ScriptableObjects/      # Vehicle & track tuning
-│   │   ├── Scripts/
-│   │   │   ├── Audio/              # Engine / SFX hooks
-│   │   │   ├── Camera/             # FollowCamera
-│   │   │   ├── Core/               # Bootstrap, GameManager, layers
-│   │   │   ├── Input/              # IVehicleInputProvider, PlayerInputReader
-│   │   │   ├── Race/               # RaceManager, checkpoints, placement
-│   │   │   ├── Track/              # OvalTrackBuilder, TrackDefinition
-│   │   │   ├── UI/                 # Menu, race HUD, pause
-│   │   │   ├── VFX/                # Drift trails, exhaust smoke
-│   │   │   └── Vehicle/            # Physics, AI, visuals
-│   │   └── SETUP.md                # Short setup reference
-│   ├── Scenes/
-│   │   └── SampleScene.unity       # Race scene
-│   └── Settings/                   # URP PC + Mobile pipeline assets
-├── Packages/
-├── ProjectSettings/
+│   ├── NeonLap/
+│   │   ├── Input/
+│   │   ├── Materials/
+│   │   ├── Prefabs/              # Optional artist cars (see README there)
+│   │   ├── Resources/NeonLap/    # Tracks, garage, catalog, profiles
+│   │   ├── Scenes/MainMenu.unity
+│   │   └── Scripts/
+│   │       ├── Audio/
+│   │       ├── Camera/           # Follow, photo mode
+│   │       ├── Core/             # GameManager, modes, fuel, content catalog
+│   │       ├── Environment/      # Hazards, pickups, fuel pads
+│   │       ├── Race/             # Modes, scoring, ghost, career
+│   │       ├── Services/         # Leaderboards, achievements, RaceEventHub
+│   │       ├── Track/            # Builders, TrackDefinition, 6 levels
+│   │       ├── UI/
+│   │       ├── VFX/              # Weather, rain, trails
+│   │       └── Vehicle/
+│   ├── Scenes/SampleScene.unity
+│   └── Settings/                 # URP PC + Mobile
+├── docs/PRODUCTION.md
+├── Tools/generate_neonlap_audio.py
 └── README.md
 ```
 
 ---
 
-## Architecture Overview
+## Architecture
 
-### Runtime bootstrap
+### Bootstrap
+- **`MainMenuSetup`** — Menu UI, `GameManager` (persistent), settings load
+- **`NeonLapSceneSetup`** — Track, environment, racers, race systems, UI
+- **`NeonLapServicesBootstrap`** — Local leaderboards + achievement tracker
 
-- **`MainMenuSetup`** — Creates main menu UI, EventSystem (Input System UI module), and `GameManager` at runtime.
-- **`NeonLapSceneSetup`** — Single entry point for the race scene: environment, track, player, 9 AI rivals, camera, race systems, HUD, and pause menu.
-
-### Vehicle stack
-
-| Component | Role |
-|-----------|------|
-| `VehicleController` | Player arcade hover physics |
-| `AIVehicleController` | Waypoint steering + rubber-band pacing |
-| `VehicleGroundProbe` | Multi-ray ground detection |
-| `VehicleReset` | Fall / off-track recovery |
-| `RaceStartGate` | Freezes cars until countdown GO |
-| `HoverCarVisualBuilder` | Procedural low-poly car mesh |
-| `ExhaustSmokeVFX` | Speed-based particle exhaust |
-
-### Race stack
-
-| Component | Role |
-|-----------|------|
-| `OvalTrackBuilder` | Builds closed oval centerline, surface, barriers, AI waypoints |
-| `TrackCheckpoint` | Lap validation triggers |
-| `RacerProgress` | Per-car lap / checkpoint state |
-| `RaceManager` | Countdown, lap logic, finish placement |
-| `RaceUI` | Lap timer, countdown, **YOU WON!** / finish overlay |
-
-### Scene flow
-
+### Race flow
 ```
 MainMenu → GameManager.LoadRace() → SampleScene
-SampleScene → Pause → MAIN MENU → GameManager.LoadMainMenu()
+RaceManager: Countdown → Racing → Finished
+OnRaceFinished → UI, career, ghosts, RaceEventHub → achievements / leaderboards
 ```
 
----
+### Key systems
 
-## Configuration & Tuning
+| Area | Components |
+|------|------------|
+| Vehicle | `VehicleController`, `AIVehicleController`, `VehicleFuelSystem`, `VehicleNitroBoost`, `VehicleBarrelRoll` |
+| Track | `OvalTrackBuilder`, `TrackCenterlineBuilder`, `TrackDefinition`, level builders |
+| Race | `RaceManager`, `RacerProgress`, `RaceScoreSystem`, mode controllers |
+| Police | `PoliceChaseSystem`, `PlayerHeatSystem`, `ChaseModeController` |
+| Replay | `RaceReplaySystem`, `GhostRacer`, `TimeTrialRecordStore` |
+| Scoring | `RaceScoreSystem`, `CareerScoreStore`, `ScoreAttackRecordStore` |
 
-### Vehicle feel
-
-Edit **`Assets/NeonLap/ScriptableObjects/DefaultVehicleProfile.asset`**:
-
-| Field | Effect |
-|-------|--------|
-| `maxSpeed` / `acceleration` | Top speed and throttle response |
-| `turnSpeedLow` / `turnSpeedHigh` | Steering at low vs high speed |
-| `grip` / `driftGripMultiplier` | Traction vs drift slip |
-| `hoverHeight` / `hoverForce` | Hover stability |
-
-Alternate profiles: `VehicleProfile_Drift.asset`, `VehicleProfile_Speed.asset`
-
-### Track layout
-
-Edit **`Assets/NeonLap/ScriptableObjects/DefaultTrackDefinition.asset`**:
-
-| Field | Default | Effect |
-|-------|---------|--------|
-| `lapCount` | 3 | Laps to finish |
-| `straightLength` | 80 | Straight section length |
-| `turnRadius` | 25 | Turn radius |
-| `trackWidth` | 14 | Track width |
-| `checkpointCount` | 10 | Checkpoints per lap |
-
-### AI grid size
-
-On the **NeonLap** GameObject in SampleScene, adjust **`NeonLapSceneSetup`**:
-
-- `spawnAiRivals` — enable/disable AI
-- `aiRivalCount` — default **9** (10 cars total with player)
+### Runtime vs prefabs
+- **Default:** cars and track meshes are **built in code** (fast iteration).
+- **Shipping:** assign prefabs on `NeonLapContentCatalog` (`Resources/NeonLap/` or scene reference). Menu: **NeonLap → Production**.
 
 ---
 
-## Tags & Layers
+## Configuration
 
-| Name | Type | Usage |
-|------|------|-------|
-| `Player` | Tag | Player hover car |
-| `Track` | Tag + Layer 6 | Track surface raycasts |
-| `Checkpoint` | Tag | Lap validation |
-| `Barrier` | Tag | Outer wall colliders |
-| `Vehicle` | Layer 7 | Player and AI cars |
+| Asset / setting | Purpose |
+|-----------------|---------|
+| `Resources/NeonLap/VehicleProfiles/*` | Handling profiles |
+| `Resources/NeonLap/Tracks/*` | Per-level track stats |
+| `GameLapSettings` | 1 / 2 / 3 / 5 laps (menu) |
+| `GameDifficultySettings` | Easy / Medium / Hard AI |
+| `GameRaceModeSettings` | Active mode rules |
+| `GamePoliceSettings` | Police for career/custom (TT uses `TimeTrialSettings.PoliceEnabled`) |
+| `TimeTrialSettings` | TT rivals, ghost clip, optional police, time ranks on/off |
+| `GameQualitySettings` | AI count, rain, helicopter, pickup density |
+
+---
+
+## Leaderboards & achievements (local)
+
+**Leaderboards** — `LeaderboardService` writes JSON next to player saves. Boards are per mode + track (time or score).
+
+**Achievements** — unlocked into `PlayerPrefs`; hook platform SDKs:
+
+```csharp
+AchievementTracker.AchievementUnlocked += id => {
+    // Map AchievementIds.* to Steam / Game Center / Play Games
+};
+```
+
+**Events** — `RaceEventHub.RaceFinished`, `LapPersonalBest`, `PoliceEscaped` (also used internally).
+
+---
+
+## Audio
+
+Procedural placeholder clips can be generated:
+
+```bash
+python3 Tools/generate_neonlap_audio.py
+```
+
+See `Assets/NeonLap/Audio/README.md` for clip names.
 
 ---
 
 ## Rendering
 
 - **PC:** `Assets/Settings/PC_RPAsset.asset`
-- **Mobile:** `Assets/Settings/Mobile_RPAsset.asset` (MSAA, 0.8 render scale)
+- **Mobile:** `Assets/Settings/Mobile_RPAsset.asset`
 
-Switch the active pipeline in **Edit → Project Settings → Graphics**. NeonLap uses primitive geometry and a small material set for low draw-call overhead.
-
----
-
-## Manual Scene Wiring
-
-If rebuilding SampleScene from scratch:
-
-1. Create an empty GameObject named **`NeonLap`**
-2. Add **`NeonLapSceneSetup`**
-3. Assign references:
-   - `DefaultVehicleProfile`
-   - `DefaultTrackDefinition`
-   - `NeonLap_InputActions`
-   - Materials: `M_TrackSurface`, `M_TrackEdgeNeon`, `M_CarBody`, `M_CarNeon`
-4. Ensure a **Main Camera** exists (`FollowCamera` is added at runtime)
-
-For the main menu:
-
-1. Open **`Assets/NeonLap/Scenes/MainMenu.unity`**
-2. Add an empty GameObject with **`MainMenuSetup`**
-
-See also: [`Assets/NeonLap/SETUP.md`](Assets/NeonLap/SETUP.md)
+Switch active pipeline in **Project Settings → Graphics**.
 
 ---
 
 ## Git & Unity
 
-This repo uses the standard [Unity `.gitignore`](https://github.com/github/gitignore/blob/main/Unity.gitignore).
+Standard Unity `.gitignore`. Commit `.meta` files with assets.
 
-**Committed:** `Assets/`, `Packages/`, `ProjectSettings/`, `.meta` files  
-**Ignored:** `Library/`, `Temp/`, `Logs/`, `UserSettings/`, `.DS_Store`, IDE caches
-
-Always commit `.meta` files alongside assets — Unity relies on them for GUID references.
+**Ignored:** `Library/`, `Temp/`, `UserSettings/`, etc.
 
 ---
 
-## Development Roadmap
+## Docs
 
-| Phase | Status | Highlights |
-|-------|--------|------------|
-| Phase 1 | ✅ | Vehicle, procedural track, camera |
-| Phase 2 | ✅ | Checkpoints, countdown, lap UI |
-| Phase 3 | ✅ | Neon look, main menu, environment |
-| Phase 4 | ✅ | AI grid, rubber-band, pause, mobile RP pass |
-
-### Possible next steps
-
-- Audio clips and mixers
-- Additional tracks via `TrackDefinition` variants
-- Local multiplayer or time trial leaderboard
-- Mobile touch controls
-- Hover car prefab for editor placement
+| Doc | Contents |
+|-----|----------|
+| [`Assets/NeonLap/SETUP.md`](Assets/NeonLap/SETUP.md) | Short wiring reference |
+| [`docs/PRODUCTION.md`](docs/PRODUCTION.md) | Prefabs, Addressables, builds, SDK hooks |
+| [`Assets/NeonLap/Prefabs/README.md`](Assets/NeonLap/Prefabs/README.md) | Baking hover-car prefabs |
 
 ---
 
 ## License
 
-This project is provided as-is for learning and development. Add a license file here if you plan to open-source or distribute builds.
+Provided as-is for learning and development. Add a license file before distribution.
 
 ---
 

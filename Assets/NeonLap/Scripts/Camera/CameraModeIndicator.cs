@@ -32,6 +32,16 @@ namespace NeonLap.Camera
             if (followCamera == null || labelText == null)
                 return;
 
+            var spectacle = CameraSpectacleDirector.Instance != null
+                ? CameraSpectacleDirector.Instance.GetSpectacleLabel()
+                : null;
+
+            if (!string.IsNullOrEmpty(spectacle))
+            {
+                ShowLabel(spectacle, false);
+                return;
+            }
+
             if (followCamera.Mode != lastMode)
             {
                 lastMode = followCamera.Mode;

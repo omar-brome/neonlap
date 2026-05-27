@@ -1,3 +1,4 @@
+using NeonLap.Race;
 using NeonLap.Vehicle;
 using UnityEngine;
 using UnityEngine.UI;
@@ -8,8 +9,11 @@ namespace NeonLap.UI
     {
         static readonly Color WarningColor = new(1f, 0.28f, 0.22f, 0.85f);
         static readonly Color CriticalColor = new(1f, 0.12f, 0.12f, 0.95f);
+        static readonly Color GhostWarningColor = new(0.55f, 0.95f, 1f, 0.9f);
 
         CollisionProximitySensor sensor;
+        GhostHudController ghostHud;
+        Transform playerTransform;
         Image topEdge;
         Image bottomEdge;
         Image leftEdge;
@@ -46,24 +50,38 @@ namespace NeonLap.UI
             warningText = CreateWarningLabel(root.transform);
         }
 
-        public void Configure(CollisionProximitySensor proximitySensor)
+        public void Configure(CollisionProximitySensor proximitySensor, GhostHudController ghostHudController = null,
+            Transform player = null)
         {
             sensor = proximitySensor;
+            ghostHud = ghostHudController;
+            playerTransform = player;
         }
 
         void Update()
         {
-            if (sensor == null || !sensor.IsWarningActive)
+            var hazardLevel = sensor != null && sensor.IsWarningActive ? sensor.WarningLevel : 0f;
+            var ghostLevel = 0f;
+            Vector3 hazardPoint = sensor != null ? sensor.NearestHazardPoint : Vector3.zero;
+            var ghostPoint = Vector3.zero;
+            var ghostActive = ghostHud != null && playerTransform != null
+                              && GhostAheadWarning.TryEvaluate(ghostHud.PrimaryGhost, playerTransform, out ghostLevel,
+                                  out ghostPoint);
+
+            if (hazardLevel <= 0.02f && !ghostActive)
             {
                 if (rootGroup != null && rootGroup.alpha > 0f)
                     rootGroup.alpha = 0f;
                 return;
             }
 
-            var level = sensor.WarningLevel;
+            var level = Mathf.Max(hazardLevel, ghostLevel);
             rootGroup.alpha = 1f;
 
-            var color = Color.Lerp(WarningColor, CriticalColor, level);
+            var useGhostColor = ghostActive && ghostLevel >= hazardLevel;
+            var color = useGhostColor
+                ? GhostWarningColor
+                : Color.Lerp(WarningColor, CriticalColor, level);
             color.a = Mathf.Lerp(0.35f, 0.92f, level);
             var pulse = 0.85f + Mathf.Sin(Time.unscaledTime * (8f + level * 10f)) * 0.15f;
             color.a *= pulse;
@@ -73,13 +91,14 @@ namespace NeonLap.UI
             SetEdge(leftEdge, color);
             SetEdge(rightEdge, color);
 
-            UpdateDirectionMarker(level, color);
-            UpdateWarningText(level, color);
+            var markerPoint = useGhostColor ? ghostPoint : hazardPoint;
+            UpdateDirectionMarker(level, color, markerPoint);
+            UpdateWarningText(level, color, useGhostColor);
         }
 
-        void UpdateDirectionMarker(float level, Color color)
+        void UpdateDirectionMarker(float level, Color color, Vector3 worldPoint)
         {
-            if (directionMarker == null || sensor == null)
+            if (directionMarker == null)
                 return;
 
             var cam = UnityEngine.Camera.main;
@@ -89,7 +108,7 @@ namespace NeonLap.UI
                 return;
             }
 
-            var screen = cam.WorldToScreenPoint(sensor.NearestHazardPoint);
+            var screen = cam.WorldToScreenPoint(worldPoint);
             if (screen.z < 0f)
             {
                 directionMarker.enabled = false;
@@ -112,13 +131,20 @@ namespace NeonLap.UI
             directionMarker.color = markerColor;
         }
 
-        void UpdateWarningText(float level, Color color)
+        void UpdateWarningText(float level, Color color, bool ghostAhead)
         {
             if (warningText == null)
                 return;
 
             warningText.enabled = level > 0.2f;
             warningText.color = color;
+            if (ghostAhead)
+            {
+                warningText.text = level > 0.55f ? "! GHOST AHEAD ON LINE !" : "! GHOST IN LANE !";
+                warningText.fontSize = level > 0.55f ? 32 : 26;
+                return;
+            }
+
             warningText.text = level > 0.72f ? "! IMPACT IMMINENT !" : "! PROXIMITY WARNING !";
             warningText.fontSize = level > 0.72f ? 34 : 28;
         }

@@ -1,5 +1,7 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using NeonLap.Audio;
 using NeonLap.Race;
 using UnityEngine;
 using UnityEngine.UI;
@@ -88,14 +90,18 @@ namespace NeonLap.UI
         float lastLineTime;
         Coroutine displayRoutine;
         Coroutine monitorRoutine;
+        CommentaryVoiceover voiceover;
         readonly System.Random lineRandom = new(90210);
 
-        public void Configure(RaceManager manager, Text subtitle, GameObject panel)
+        public event Action<CommentaryCategory> OnCommentaryLine;
+
+        public void Configure(RaceManager manager, Text subtitle, GameObject panel, CommentaryVoiceover voice = null)
         {
             Unsubscribe();
             raceManager = manager;
             subtitleText = subtitle;
             subtitlePanel = panel;
+            voiceover = voice;
             Subscribe();
             ResetTracking();
             SetPanelVisible(false);
@@ -148,7 +154,7 @@ namespace NeonLap.UI
             {
                 ResetTracking();
                 BeginMonitoring();
-                QueueLine(PickRandom(RaceStartLines), true);
+                QueueLine(PickRandom(RaceStartLines), CommentaryCategory.RaceStart, true);
                 return;
             }
 
@@ -162,16 +168,17 @@ namespace NeonLap.UI
                 return;
 
             if (completedLap == raceManager.TotalLaps - 1)
-                QueueLine(PickRandom(FinalLapLines));
+                QueueLine(PickRandom(FinalLapLines), CommentaryCategory.FinalLap);
         }
 
         void HandleRaceFinished(int placement)
         {
             StopMonitoring();
             if (placement == 1)
-                QueueLine(PickRandom(WinLines), true);
+                QueueLine(PickRandom(WinLines), CommentaryCategory.Win, true);
             else
-                QueueLine(string.Format(PickRandom(FinishLines), GetPlacementLabel(placement)), true);
+                QueueLine(string.Format(PickRandom(FinishLines), GetPlacementLabel(placement)),
+                    CommentaryCategory.Finish, true);
         }
 
         void ResetTracking()
@@ -233,21 +240,23 @@ namespace NeonLap.UI
             {
                 var gain = oldPosition - newPosition;
                 if (newPosition == 1)
-                    QueueLine(PickRandom(TakeLeadLines));
+                    QueueLine(PickRandom(TakeLeadLines), CommentaryCategory.TakeLead);
                 else if (gain >= 2)
-                    QueueLine(string.Format(PickRandom(BigGainLines), gain));
+                    QueueLine(string.Format(PickRandom(BigGainLines), gain), CommentaryCategory.BigGain);
                 else
-                    QueueLine(string.Format(PickRandom(OvertakeLines), GetPlacementLabel(newPosition)));
+                    QueueLine(string.Format(PickRandom(OvertakeLines), GetPlacementLabel(newPosition)),
+                        CommentaryCategory.Overtake);
                 return;
             }
 
             if (newPosition >= totalRacers)
-                QueueLine(PickRandom(LastPlaceLines));
+                QueueLine(PickRandom(LastPlaceLines), CommentaryCategory.LastPlace);
             else
-                QueueLine(string.Format(PickRandom(DropLines), GetPlacementLabel(newPosition)));
+                QueueLine(string.Format(PickRandom(DropLines), GetPlacementLabel(newPosition)),
+                    CommentaryCategory.Drop);
         }
 
-        void QueueLine(string line, bool force = false)
+        void QueueLine(string line, CommentaryCategory category, bool force = false)
         {
             if (string.IsNullOrWhiteSpace(line))
                 return;
@@ -256,6 +265,8 @@ namespace NeonLap.UI
                 return;
 
             lastLineTime = Time.time;
+            voiceover?.Play(category, force);
+            OnCommentaryLine?.Invoke(category);
             if (displayRoutine != null)
                 StopCoroutine(displayRoutine);
             displayRoutine = StartCoroutine(DisplayLineRoutine(line));

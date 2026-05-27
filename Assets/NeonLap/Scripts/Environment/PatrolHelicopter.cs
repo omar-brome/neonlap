@@ -1,4 +1,7 @@
+using NeonLap.Core;
 using NeonLap.Race;
+using NeonLap.VFX;
+using NeonLap.Vehicle;
 using UnityEngine;
 
 namespace NeonLap.Environment
@@ -17,23 +20,39 @@ namespace NeonLap.Environment
         [SerializeField] float mainRotorSpeed = 720f;
         [SerializeField] float tailRotorSpeed = 980f;
         [SerializeField] float maxBankAngle = 14f;
+        [SerializeField] float searchlightBaseIntensity = 2.2f;
+        [SerializeField] float searchlightStormIntensity = 5.8f;
+        [SerializeField] float searchlightSpotAngle = 36f;
+        [SerializeField] float searchlightSirenColorBlend = 0.72f;
+        [SerializeField] float searchlightSirenIntensityPulse = 0.55f;
 
         Transform followTarget;
         Transform mainRotor;
         Transform tailRotor;
         Light searchlight;
         RaceManager raceManager;
+        PoliceChaseSystem policeChase;
+        SearchlightBloomDriver bloomDriver;
         float phaseOffset;
         Vector3 velocity;
+        float glare;
 
-        public void Configure(Transform target, HelicopterVisualBuilder.BuiltHelicopter visual, RaceManager manager)
+        public static PatrolHelicopter Active { get; private set; }
+
+        public void Configure(Transform target, HelicopterVisualBuilder.BuiltHelicopter visual, RaceManager manager,
+            PoliceChaseSystem chase = null)
         {
             followTarget = target;
             mainRotor = visual.MainRotor;
             tailRotor = visual.TailRotor;
             searchlight = visual.Searchlight;
             raceManager = manager;
+            policeChase = chase;
             phaseOffset = Random.Range(0f, Mathf.PI * 2f);
+
+            var camera = UnityEngine.Camera.main;
+            if (camera != null)
+                bloomDriver = SearchlightBloomDriver.Ensure(camera);
         }
 
         void LateUpdate()
@@ -47,6 +66,13 @@ namespace NeonLap.Environment
             UpdateFlightPosition();
             UpdateFlightRotation();
             UpdateSearchlight();
+            bloomDriver?.SetGlare(glare);
+        }
+
+        void OnDestroy()
+        {
+            if (Active == this)
+                Active = null;
         }
 
         void Update()
@@ -55,7 +81,7 @@ namespace NeonLap.Environment
                 mainRotor.Rotate(Vector3.up, mainRotorSpeed * Time.deltaTime, Space.Self);
 
             if (tailRotor != null)
-                tailRotor.Rotate(Vector3.forward, tailRotorSpeed * Time.deltaTime, Space.Self);
+                tailRotor.Rotate(Vector3.right, tailRotorSpeed * Time.deltaTime, Space.Self);
         }
 
         void UpdateFlightPosition()
@@ -96,6 +122,7 @@ namespace NeonLap.Environment
 
         void UpdateSearchlight()
         {
+            glare = 0f;
             if (searchlight == null || followTarget == null)
                 return;
 
@@ -110,6 +137,35 @@ namespace NeonLap.Environment
             var active = raceManager == null || raceManager.State == RaceState.Racing ||
                          raceManager.State == RaceState.Finished;
             searchlight.enabled = active;
+            if (!active)
+                return;
+
+            var weather = DynamicWeatherSystem.Instance;
+            var lowVisibility = weather != null && weather.IsLowVisibility;
+            var distance = direction.magnitude;
+            var angle = Vector3.Angle(lightTransform.forward, direction.normalized);
+            var inBeam = 1f - Mathf.InverseLerp(searchlightSpotAngle * 0.5f, 0f, angle);
+            var distanceFalloff = 1f - Mathf.InverseLerp(searchlight.range * 0.85f, searchlight.range * 0.2f, distance);
+            glare = inBeam * distanceFalloff * (lowVisibility ? 1f : 0.45f);
+
+            var intensity = Mathf.Lerp(searchlightBaseIntensity,
+                lowVisibility ? searchlightStormIntensity : searchlightBaseIntensity * 1.35f,
+                Mathf.Max(inBeam, lowVisibility ? 0.55f : 0f));
+
+            var chaseActive = GamePoliceSettings.IsActiveForCurrentRace() && policeChase != null && policeChase.HasActiveUnits;
+            if (chaseActive && PoliceSirenStrobeSync.TryGetDominantStrobeColor(out var strobeColor))
+            {
+                searchlight.color = Color.Lerp(Color.white, strobeColor, searchlightSirenColorBlend);
+                var pulse = 1f + Mathf.Sin(Time.time * 28f) * searchlightSirenIntensityPulse;
+                intensity *= pulse;
+            }
+            else
+            {
+                searchlight.color = Color.white;
+            }
+
+            searchlight.intensity = intensity;
+            searchlight.spotAngle = lowVisibility ? searchlightSpotAngle + 6f : searchlightSpotAngle;
         }
     }
 }

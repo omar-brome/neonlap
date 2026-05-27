@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using NeonLap.Race;
+using NeonLap.Track;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -9,29 +10,48 @@ namespace NeonLap.UI
     {
         static readonly Color ArrowColor = new(0.35f, 1f, 1f, 0.95f);
         static readonly Color EdgeArrowColor = new(1f, 0.82f, 0.2f, 0.92f);
+        static readonly Color GhostLineColor = new(0.55f, 0.95f, 1f, 0.95f);
         static Sprite WhiteSprite => UiSpriteUtility.White;
 
+        [SerializeField] float offLinePulseSpeed = 5.5f;
+        [SerializeField] float offLineLateralFraction = 0.38f;
+
         RaceManager raceManager;
+        GhostHudController ghostHud;
         Transform playerTransform;
         RacerProgress playerRacer;
         IReadOnlyList<Transform> checkpoints;
+        IReadOnlyList<Vector3> centerlinePoints;
+        float trackHalfWidth = 7f;
 
         RectTransform hudRoot;
         RectTransform compassArrow;
+        CanvasGroup compassPulseGroup;
         Text distanceLabel;
         Image edgeArrow;
         GameObject worldArrowRoot;
+        Vector3 compassBaseScale = Vector3.one;
+        float pulsePhase;
 
-        public void Configure(RaceManager manager, Transform player, IReadOnlyList<Transform> checkpointTransforms,
-            Transform canvasRoot)
+        public void Configure(
+            RaceManager manager,
+            Transform player,
+            IReadOnlyList<Transform> checkpointTransforms,
+            Transform canvasRoot,
+            IReadOnlyList<Vector3> centerline,
+            float halfTrackWidth)
         {
             raceManager = manager;
             playerTransform = player;
             playerRacer = player != null ? player.GetComponent<RacerProgress>() : null;
             checkpoints = checkpointTransforms;
+            centerlinePoints = centerline;
+            trackHalfWidth = Mathf.Max(halfTrackWidth, 4f);
             BuildHud(canvasRoot);
             BuildWorldArrow();
         }
+
+        public void BindGhostHud(GhostHudController controller) => ghostHud = controller;
 
         void BuildHud(Transform canvasRoot)
         {
@@ -63,6 +83,8 @@ namespace NeonLap.UI
             compassArrow.pivot = new Vector2(0.5f, 0.5f);
             compassArrow.anchoredPosition = new Vector2(0f, -8f);
             compassArrow.sizeDelta = new Vector2(34f, 52f);
+            compassPulseGroup = compassArrow.gameObject.AddComponent<CanvasGroup>();
+            compassBaseScale = compassArrow.localScale;
 
             var arrowBody = CreateImage("ArrowBody", compassArrow, new Vector2(0f, -4f), new Vector2(10f, 28f), ArrowColor);
             var arrowHead = CreateImage("ArrowHead", compassArrow, new Vector2(0f, 16f), new Vector2(28f, 28f), ArrowColor);
@@ -159,6 +181,10 @@ namespace NeonLap.UI
             }
 
             var target = GetTargetPosition();
+            var ghostAhead = TryGetGhostAheadTarget(out var ghostTarget, out var ghostLevel);
+            if (ghostAhead)
+                target = ghostTarget;
+
             var toTarget = target - playerTransform.position;
             toTarget.y = 0f;
             var distance = toTarget.magnitude;
@@ -171,11 +197,35 @@ namespace NeonLap.UI
             }
 
             SetHudVisible(true);
-            UpdateHudGuide(toTarget, distance);
-            UpdateWorldArrow(toTarget, distance);
+            var offLine = ghostAhead || IsOffOptimalLine();
+            UpdateHudGuide(toTarget, distance, offLine, ghostAhead, ghostLevel);
+            UpdateWorldArrow(toTarget, distance, offLine, ghostAhead);
         }
 
-        void UpdateHudGuide(Vector3 toTarget, float distance)
+        bool TryGetGhostAheadTarget(out Vector3 ghostPosition, out float warningLevel)
+        {
+            ghostPosition = Vector3.zero;
+            warningLevel = 0f;
+            if (ghostHud == null || playerTransform == null)
+                return false;
+
+            return GhostAheadWarning.TryEvaluate(
+                ghostHud.PrimaryGhost,
+                playerTransform,
+                out warningLevel,
+                out ghostPosition);
+        }
+
+        bool IsOffOptimalLine()
+        {
+            return CenterlineNavigationUtility.IsOffOptimalLine(
+                playerTransform.position,
+                centerlinePoints,
+                trackHalfWidth,
+                offLineLateralFraction);
+        }
+
+        void UpdateHudGuide(Vector3 toTarget, float distance, bool offLine, bool ghostAhead, float ghostLevel)
         {
             if (compassArrow != null)
             {
@@ -183,18 +233,60 @@ namespace NeonLap.UI
                 forward.y = 0f;
                 var angle = Vector3.SignedAngle(forward.normalized, toTarget.normalized, Vector3.up);
                 compassArrow.localRotation = Quaternion.Euler(0f, 0f, -angle);
+
+                var arrowImages = compassArrow.GetComponentsInChildren<Image>();
+                var tint = ghostAhead
+                    ? Color.Lerp(GhostLineColor, EdgeArrowColor, ghostLevel)
+                    : ArrowColor;
+                for (var i = 0; i < arrowImages.Length; i++)
+                    arrowImages[i].color = tint;
             }
 
-            if (distanceLabel != null)
-                distanceLabel.text = $"{Mathf.RoundToInt(distance)}m";
+            UpdateOffLinePulse(offLine, ghostAhead ? offLinePulseSpeed * 1.35f : offLinePulseSpeed);
 
-            UpdateEdgeArrow(toTarget);
+            if (distanceLabel != null)
+            {
+                if (ghostAhead)
+                {
+                    distanceLabel.text = $"GHOST  {Mathf.RoundToInt(distance)}m";
+                    distanceLabel.color = GhostLineColor;
+                }
+                else
+                {
+                    distanceLabel.text = offLine
+                        ? $"OFF LINE  {Mathf.RoundToInt(distance)}m"
+                        : $"{Mathf.RoundToInt(distance)}m";
+                    distanceLabel.color = offLine ? EdgeArrowColor : ArrowColor;
+                }
+            }
+
+            UpdateEdgeArrow(toTarget, offLine, ghostAhead);
         }
 
-        void UpdateEdgeArrow(Vector3 toTarget)
+        void UpdateOffLinePulse(bool offLine, float pulseSpeed)
+        {
+            if (compassPulseGroup == null || compassArrow == null)
+                return;
+
+            if (!offLine)
+            {
+                compassPulseGroup.alpha = 1f;
+                compassArrow.localScale = compassBaseScale;
+                return;
+            }
+
+            pulsePhase += Time.deltaTime * pulseSpeed;
+            var pulse = 0.82f + Mathf.Sin(pulsePhase) * 0.18f;
+            compassPulseGroup.alpha = pulse;
+            compassArrow.localScale = compassBaseScale * (1f + Mathf.Sin(pulsePhase * 1.35f) * 0.12f);
+        }
+
+        void UpdateEdgeArrow(Vector3 toTarget, bool offLine, bool ghostAhead)
         {
             if (edgeArrow == null)
                 return;
+
+            edgeArrow.color = ghostAhead ? GhostLineColor : offLine ? EdgeArrowColor : ArrowColor;
 
             var cam = UnityEngine.Camera.main;
             if (cam == null)
@@ -243,7 +335,7 @@ namespace NeonLap.UI
 
         static Vector2 ScreenCenter => new(Screen.width * 0.5f, Screen.height * 0.5f);
 
-        void UpdateWorldArrow(Vector3 toTarget, float distance)
+        void UpdateWorldArrow(Vector3 toTarget, float distance, bool offLine, bool ghostAhead)
         {
             if (worldArrowRoot == null)
                 return;
@@ -259,6 +351,17 @@ namespace NeonLap.UI
             var position = playerTransform.position + toTarget.normalized * leadDistance + Vector3.up * 3.2f;
             worldArrowRoot.transform.position = position;
             worldArrowRoot.transform.rotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
+
+            if (offLine || ghostAhead)
+            {
+                pulsePhase += Time.deltaTime * (ghostAhead ? offLinePulseSpeed * 1.35f : offLinePulseSpeed);
+                var scale = 1f + Mathf.Sin(pulsePhase) * 0.14f;
+                worldArrowRoot.transform.localScale = Vector3.one * scale;
+            }
+            else
+            {
+                worldArrowRoot.transform.localScale = Vector3.one;
+            }
         }
 
         Vector3 GetTargetPosition()

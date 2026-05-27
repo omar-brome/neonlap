@@ -1,3 +1,4 @@
+using NeonLap.Core;
 using UnityEngine;
 
 namespace NeonLap.Race
@@ -100,8 +101,13 @@ namespace NeonLap.Race
             platform.transform.SetParent(parent, false);
             platform.transform.localPosition = localPos;
             platform.transform.localScale = size;
-            Object.Destroy(platform.GetComponent<Collider>());
+            platform.layer = NeonLapLayers.Track;
+            platform.tag = "Track";
             platform.GetComponent<Renderer>().sharedMaterial = baseMaterial;
+
+            var platformCollider = platform.GetComponent<BoxCollider>();
+            if (platformCollider != null)
+                platformCollider.isTrigger = false;
 
             var trim = GameObject.CreatePrimitive(PrimitiveType.Cube);
             trim.name = "Trim";
@@ -109,6 +115,7 @@ namespace NeonLap.Race
             trim.transform.localPosition = new Vector3(0f, 0.52f, 0f);
             trim.transform.localScale = new Vector3(1.02f, 0.08f, 1.04f);
             Object.Destroy(trim.GetComponent<Collider>());
+            trim.layer = NeonLapLayers.Track;
 
             var trimMat = new Material(accentMaterial);
             trimMat.SetColor("_BaseColor", accent ?? new Color(0.15f, 0.85f, 1f));

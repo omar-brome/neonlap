@@ -25,6 +25,7 @@ namespace NeonLap.Vehicle
         VehicleController vehicleController;
         AIVehicleController aiController;
         float brakeBlend;
+        bool blackoutMode;
 
         void Awake()
         {
@@ -34,9 +35,14 @@ namespace NeonLap.Vehicle
             CreateRearPointLights();
         }
 
+        public void SetBlackoutMode(bool enabled)
+        {
+            blackoutMode = enabled;
+        }
+
         void Update()
         {
-            var targetBlend = IsBraking() ? 1f : 0f;
+            var targetBlend = blackoutMode ? 1f : (IsBraking() ? 1f : 0f);
             brakeBlend = Mathf.MoveTowards(brakeBlend, targetBlend, Time.deltaTime * (targetBlend > brakeBlend ? 14f : 8f));
             ApplyVisuals(brakeBlend);
         }
@@ -138,7 +144,9 @@ namespace NeonLap.Vehicle
             SetMaterialGroup(brakeMaterials, BrakeBaseDim, BrakeBaseBright, BrakeEmissionDim, BrakeEmissionBright,
                 blend);
 
-            var lightIntensity = Mathf.Lerp(0.45f, 2.8f, blend);
+            var minIntensity = blackoutMode ? 2.4f : 0.45f;
+            var maxIntensity = blackoutMode ? 5.5f : 2.8f;
+            var lightIntensity = Mathf.Lerp(minIntensity, maxIntensity, blend);
             foreach (var light in rearLights)
             {
                 if (light != null)

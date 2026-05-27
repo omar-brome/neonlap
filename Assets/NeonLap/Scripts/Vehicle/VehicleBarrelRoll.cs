@@ -1,3 +1,4 @@
+using System;
 using NeonLap.Input;
 using UnityEngine;
 
@@ -24,8 +25,34 @@ namespace NeonLap.Vehicle
         RigidbodyConstraints savedConstraints;
         float rollStartTime;
         float lastRollTime = -999f;
+        float minSpeedMphOverride = -1f;
+        float zoneHoverForceMultiplier = 1f;
+        bool allowAirRoll;
+        float airRollMinSpeedMph = 8f;
 
         public bool IsRolling { get; private set; }
+
+        public void SetAllowAirRoll(bool enabled)
+        {
+            allowAirRoll = enabled;
+        }
+
+        public void SetAirRollMinSpeedMph(float mph)
+        {
+            airRollMinSpeedMph = Mathf.Max(4f, mph);
+        }
+
+        public void SetMinSpeedMphOverride(float mph)
+        {
+            minSpeedMphOverride = mph;
+        }
+
+        public void SetZoneHoverForceMultiplier(float multiplier)
+        {
+            zoneHoverForceMultiplier = Mathf.Clamp(multiplier, 0.2f, 1.5f);
+        }
+
+        public event Action<VehicleBarrelRoll> RollCompleted;
 
         public void Configure(VehicleProfile vehicleProfile)
         {
@@ -61,13 +88,22 @@ namespace NeonLap.Vehicle
             if (Time.time - lastRollTime < cooldown || profile == null)
                 return;
 
+            var requiredMph = minSpeedMphOverride > 0f ? minSpeedMphOverride : minSpeedMph;
             var forwardSpeed = Vector3.Dot(rb.linearVelocity, transform.forward);
-            if (forwardSpeed < minSpeedMph / MetersPerSecondToMph)
+            if (forwardSpeed < requiredMph / MetersPerSecondToMph)
                 return;
 
             var probe = groundProbe.Probe();
-            if (!probe.IsGrounded)
+            var airRoll = allowAirRoll && !probe.IsGrounded;
+            if (!probe.IsGrounded && !airRoll)
                 return;
+
+            if (airRoll)
+            {
+                var airMin = airRollMinSpeedMph / MetersPerSecondToMph;
+                if (forwardSpeed < airMin)
+                    return;
+            }
 
             rollAxis = transform.forward;
             startRotation = transform.rotation;
@@ -122,6 +158,7 @@ namespace NeonLap.Vehicle
 
             var horizontalSpeed = Vector3.Dot(preservedVelocity, rollAxis);
             rb.linearVelocity = rollAxis * horizontalSpeed + Vector3.up * rb.linearVelocity.y;
+            RollCompleted?.Invoke(this);
         }
 
         void ApplyHover(GroundProbeResult probe)
@@ -130,7 +167,8 @@ namespace NeonLap.Vehicle
                 return;
 
             var error = profile.hoverHeight - probe.Distance;
-            var force = Vector3.up * (error * profile.hoverForce - rb.linearVelocity.y * profile.hoverDamping);
+            var hoverForce = profile.hoverForce * zoneHoverForceMultiplier;
+            var force = Vector3.up * (error * hoverForce - rb.linearVelocity.y * profile.hoverDamping);
             rb.AddForce(force, ForceMode.Acceleration);
         }
     }

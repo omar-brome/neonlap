@@ -137,6 +137,7 @@ namespace NeonLap.VFX
             var mark = activeMarks[index];
             activeMarks.RemoveAt(index);
             mark.Object.SetActive(false);
+            SetMarkAlpha(mark, 0.65f);
             inactiveMarks.Enqueue(mark);
         }
 

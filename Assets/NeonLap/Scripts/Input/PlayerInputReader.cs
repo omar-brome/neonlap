@@ -17,6 +17,11 @@ namespace NeonLap.Input
         InputAction switchCameraAction;
         InputAction barrelRollAction;
         InputAction lookBackAction;
+        InputAction dropBananaAction;
+        InputAction empPulseAction;
+        InputAction droneCamAction;
+        InputAction hornAction;
+        InputAction nitroAction;
         bool initialized;
 
         public float Accelerate { get; private set; }
@@ -29,6 +34,11 @@ namespace NeonLap.Input
         public bool CelebrationJumpPressed { get; private set; }
         public bool BarrelRollPressed { get; private set; }
         public bool LookBackHeld { get; private set; }
+        public bool DropBananaPressed { get; private set; }
+        public bool EmpPulsePressed { get; private set; }
+        public bool DroneCamPressed { get; private set; }
+        public bool HornPressed { get; private set; }
+        public bool NitroPressed { get; private set; }
 
         public void Configure(InputActionAsset actions)
         {
@@ -56,6 +66,11 @@ namespace NeonLap.Input
             switchCameraAction = racingMap.FindAction("SwitchCamera", false);
             barrelRollAction = racingMap.FindAction("BarrelRoll", false);
             lookBackAction = racingMap.FindAction("LookBack", false);
+            dropBananaAction = racingMap.FindAction("DropBanana", false);
+            empPulseAction = racingMap.FindAction("EmpPulse", false);
+            droneCamAction = racingMap.FindAction("DroneCam", false);
+            hornAction = racingMap.FindAction("Horn", false);
+            nitroAction = racingMap.FindAction("Nitro", false);
             initialized = true;
         }
 
@@ -84,6 +99,11 @@ namespace NeonLap.Input
             CelebrationJumpPressed = driftAction.WasPressedThisFrame();
             BarrelRollPressed = barrelRollAction != null && barrelRollAction.WasPressedThisFrame();
             LookBackHeld = lookBackAction != null && lookBackAction.IsPressed();
+            DropBananaPressed = dropBananaAction != null && dropBananaAction.WasPressedThisFrame();
+            EmpPulsePressed = empPulseAction != null && empPulseAction.WasPressedThisFrame();
+            DroneCamPressed = droneCamAction != null && droneCamAction.WasPressedThisFrame();
+            HornPressed = hornAction != null && hornAction.WasPressedThisFrame();
+            NitroPressed = nitroAction != null && nitroAction.WasPressedThisFrame();
         }
     }
 }

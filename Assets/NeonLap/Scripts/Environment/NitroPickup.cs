@@ -19,6 +19,14 @@ namespace NeonLap.Environment
         bool collected;
         float phaseOffset;
 
+        public bool IsAvailable => isActiveAndEnabled && !collected;
+
+        public Vector3 WorldPosition => transform.position;
+
+        void OnEnable() => NitroPickupRegistry.Register(this);
+
+        void OnDisable() => NitroPickupRegistry.Unregister(this);
+
         void Awake()
         {
             pickupCollider = GetComponent<Collider>();
@@ -53,7 +61,7 @@ namespace NeonLap.Environment
                 return;
 
             var racer = other.GetComponentInParent<RacerProgress>();
-            if (racer == null || !racer.IsPlayer || racer.IsFinished || racer.IsEliminated)
+            if (racer == null || racer.IsFinished || racer.IsEliminated)
                 return;
 
             var raceManager = FindAnyObjectByType<RaceManager>();
@@ -64,7 +72,22 @@ namespace NeonLap.Environment
             if (nitro == null)
                 return;
 
-            nitro.ActivateFromPickup();
+            var aiCombat = racer.GetComponent<AICombatController>();
+            if (racer.IsPlayer)
+            {
+                nitro.AddCharge(1);
+                racer.GetComponent<RaceScoreSystem>()?.RegisterNitroPickup();
+                StadiumIncidentHub.Report("NITRO COLLECTED");
+            }
+            else if (aiCombat != null && aiCombat.CanCollectPickups)
+            {
+                aiCombat.OnNitroPickupCollected();
+            }
+            else
+            {
+                return;
+            }
+
             StartCoroutine(CollectAndRespawn());
         }
 

@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0e2a4c6b8d0f2e4a6c8e0b2d4f6a8c00, type: 3}
+  m_Name: Track_Level5_SquareCircuit
+  m_EditorClassIdentifier: 
+  trackName: Square Circuit
+  description: Large square loop with four 90° corners. Inner lane shortcuts on two sides.
+  sceneName: SampleScene
+  layout: 4
+  lapCount: 1
+  checkpointCount: 12
+  straightLength: 100
+  turnRadius: 18
+  trackWidth: 27
+  lengthMeters: 2950
+  hasShortcuts: 1
+  hazardDensity: 1

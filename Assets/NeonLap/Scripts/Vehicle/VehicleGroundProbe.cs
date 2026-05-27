@@ -14,6 +14,11 @@ namespace NeonLap.Vehicle
     public class VehicleGroundProbe : MonoBehaviour
     {
         [SerializeField] float rayLength = 4f;
+
+        public void SetRayLength(float length)
+        {
+            rayLength = Mathf.Max(2f, length);
+        }
         [SerializeField] Vector3[] localProbeOffsets =
         {
             Vector3.zero,

@@ -1,3 +1,4 @@
+using System.Collections;
 using NeonLap.Input;
 using UnityEngine;
 
@@ -13,8 +14,9 @@ namespace NeonLap.Vehicle
             AiAuto,
         }
 
-        [SerializeField] float jumpVelocity = 7.5f;
-        [SerializeField] float flipTorque = 14f;
+        [SerializeField] float jumpHeight = 2.2f;
+        [SerializeField] float jumpDuration = 0.62f;
+        [SerializeField] float flipDegrees = 360f;
         [SerializeField] float jumpCooldown = 0.55f;
         [SerializeField] float aiJumpIntervalMin = 1.4f;
         [SerializeField] float aiJumpIntervalMax = 3.6f;
@@ -24,11 +26,11 @@ namespace NeonLap.Vehicle
         [SerializeField] float danceYawSpeed = 1.6f;
         [SerializeField] float danceRollAmount = 6f;
         [SerializeField] float danceRollSpeed = 2.1f;
-        [SerializeField] float groundedVelocityThreshold = 0.35f;
 
         Rigidbody rb;
         PlayerInputReader inputReader;
         CelebrationMode mode;
+        Coroutine jumpRoutine;
         float lastJumpTime;
         float nextAiJumpTime;
         float danceTime;
@@ -36,7 +38,7 @@ namespace NeonLap.Vehicle
         Vector3 anchorPosition;
         Quaternion anchorRotation;
         bool anchorSet;
-        bool wasAirborne;
+        bool isJumping;
 
         void Awake()
         {
@@ -48,9 +50,13 @@ namespace NeonLap.Vehicle
         public void SetJumpEnabled(bool enabled)
         {
             if (!enabled)
+            {
+                StopJumpRoutine();
                 mode = CelebrationMode.None;
-            else if (inputReader != null)
-                mode = CelebrationMode.PlayerInput;
+                return;
+            }
+
+            mode = inputReader != null ? CelebrationMode.PlayerInput : CelebrationMode.AiAuto;
         }
 
         public void EnableCelebration()
@@ -73,11 +79,12 @@ namespace NeonLap.Vehicle
             if (rb == null)
                 return;
 
-            rb.isKinematic = false;
-            rb.useGravity = true;
-            rb.constraints = RigidbodyConstraints.None;
+            StopJumpRoutine();
+            rb.isKinematic = true;
+            rb.useGravity = false;
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
+            rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         }
 
         void CaptureAnchor()
@@ -90,7 +97,7 @@ namespace NeonLap.Vehicle
 
         void Update()
         {
-            if (mode == CelebrationMode.None || rb == null)
+            if (mode == CelebrationMode.None || rb == null || isJumping)
                 return;
 
             if (mode == CelebrationMode.PlayerInput)
@@ -102,16 +109,7 @@ namespace NeonLap.Vehicle
 
         void FixedUpdate()
         {
-            if (mode != CelebrationMode.AiAuto || rb == null || !anchorSet)
-                return;
-
-            var airborne = IsAirborne();
-            if (wasAirborne && !airborne)
-                CaptureAnchor();
-
-            wasAirborne = airborne;
-
-            if (airborne)
+            if (mode == CelebrationMode.None || rb == null || !anchorSet || isJumping)
                 return;
 
             ApplyDanceMotion();
@@ -125,15 +123,15 @@ namespace NeonLap.Vehicle
             if (!inputReader.CelebrationJumpPressed)
                 return;
 
-            PerformJump();
+            StartJump();
         }
 
         void UpdateAiJumpTimer()
         {
-            if (Time.time < nextAiJumpTime || IsAirborne())
+            if (Time.time < nextAiJumpTime || isJumping)
                 return;
 
-            PerformJump();
+            StartJump();
             ScheduleNextAiJump();
         }
 
@@ -142,9 +140,59 @@ namespace NeonLap.Vehicle
             nextAiJumpTime = Time.time + Random.Range(aiJumpIntervalMin, aiJumpIntervalMax);
         }
 
-        bool IsAirborne()
+        void StartJump()
         {
-            return Mathf.Abs(rb.linearVelocity.y) > groundedVelocityThreshold;
+            if (!anchorSet)
+                CaptureAnchor();
+
+            StopJumpRoutine();
+            jumpRoutine = StartCoroutine(JumpArcRoutine());
+            lastJumpTime = Time.time;
+        }
+
+        IEnumerator JumpArcRoutine()
+        {
+            isJumping = true;
+
+            var startPos = transform.position;
+            var startRot = transform.rotation;
+            var height = mode == CelebrationMode.AiAuto
+                ? jumpHeight * Random.Range(0.8f, 1.1f)
+                : jumpHeight;
+            var duration = mode == CelebrationMode.AiAuto
+                ? jumpDuration * Random.Range(0.9f, 1.1f)
+                : jumpDuration;
+            var spin = mode == CelebrationMode.AiAuto
+                ? flipDegrees * Random.Range(0.65f, 1.15f)
+                : flipDegrees;
+            var spinAxis = transform.right + transform.forward * Random.Range(-0.25f, 0.25f);
+            if (spinAxis.sqrMagnitude < 0.01f)
+                spinAxis = transform.right;
+            spinAxis.Normalize();
+
+            var elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.fixedDeltaTime;
+                var t = Mathf.Clamp01(elapsed / duration);
+                var eased = Mathf.SmoothStep(0f, 1f, t);
+                var heightOffset = 4f * jumpHeight * eased * (1f - eased) * (height / jumpHeight);
+                var pos = startPos + Vector3.up * heightOffset;
+                var rot = Quaternion.AngleAxis(spin * eased, spinAxis) * startRot;
+
+                rb.MovePosition(pos);
+                rb.MoveRotation(rot);
+                yield return new WaitForFixedUpdate();
+            }
+
+            anchorPosition = startPos;
+            anchorRotation = startRot;
+            rb.MovePosition(startPos);
+            rb.MoveRotation(startRot);
+
+            isJumping = false;
+            jumpRoutine = null;
+            danceTime = 0f;
         }
 
         void ApplyDanceMotion()
@@ -161,26 +209,21 @@ namespace NeonLap.Vehicle
 
             rb.MovePosition(targetPos);
             rb.MoveRotation(targetRot);
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
         }
 
-        void PerformJump()
+        void StopJumpRoutine()
         {
-            CaptureAnchor();
+            if (jumpRoutine == null)
+                return;
 
-            var velocity = rb.linearVelocity;
-            velocity.y = 0f;
-            rb.linearVelocity = velocity;
+            StopCoroutine(jumpRoutine);
+            jumpRoutine = null;
+            isJumping = false;
+        }
 
-            var jumpScale = mode == CelebrationMode.AiAuto ? Random.Range(0.75f, 1.15f) : 1f;
-            rb.AddForce(Vector3.up * jumpVelocity * jumpScale, ForceMode.VelocityChange);
-
-            var torqueAxis = transform.right + transform.forward * Random.Range(-0.35f, 0.35f);
-            var torqueScale = mode == CelebrationMode.AiAuto ? Random.Range(0.55f, 1.25f) : 1f;
-            rb.AddTorque(torqueAxis.normalized * flipTorque * torqueScale, ForceMode.Impulse);
-
-            lastJumpTime = Time.time;
+        void OnDisable()
+        {
+            StopJumpRoutine();
         }
     }
 }

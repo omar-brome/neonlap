@@ -27,11 +27,14 @@ namespace NeonLap.Core
         };
 
         Transform showcaseRoot;
+        Transform playerShowcaseCar;
         Material bodyTemplate;
         Material accentTemplate;
         Material trackSurfaceMat;
         Material trackEdgeMat;
         Material cityMat;
+        Material archMat;
+        Vector3[] showcasePath;
 
         public void Build()
         {
@@ -42,14 +45,19 @@ namespace NeonLap.Core
             showcaseRoot = new GameObject("MenuShowcase").transform;
             showcaseRoot.SetParent(transform, false);
 
-            SetupCamera();
-
-            var centerline = BuildCenterline(52f, 18f);
-            BuildTrack(centerline);
+            showcasePath = BuildDramaticCenterline();
+            BuildGroundPlane();
+            BuildTrack(showcasePath);
             BuildCityBackdrop();
-            BuildShowcaseLights(centerline);
-            SpawnRacingCars(centerline);
+            BuildNeonArch(showcasePath);
+            BuildShowcaseLights(showcasePath);
+            SpawnShowcaseCars(showcasePath);
             ApplyShowcaseEnvironment();
+
+            var pulse = showcaseRoot.gameObject.AddComponent<MainMenuShowcasePulse>();
+            pulse.Configure(trackEdgeMat);
+
+            SetupOrbitCamera();
         }
 
         void CreateMaterials()
@@ -80,21 +88,27 @@ namespace NeonLap.Core
             cityMat.SetColor("_BaseColor", new Color(0.04f, 0.05f, 0.09f));
             cityMat.EnableKeyword("_EMISSION");
             cityMat.SetColor("_EmissionColor", new Color(0.08f, 0.25f, 0.45f));
+
+            archMat = new Material(lit);
+            archMat.SetColor("_BaseColor", new Color(0.04f, 0.08f, 0.12f));
+            archMat.EnableKeyword("_EMISSION");
+            archMat.SetColor("_EmissionColor", new Color(0.2f, 2.8f, 3.5f));
+            archMat.SetFloat("_Smoothness", 0.92f);
         }
 
         void ApplyShowcaseEnvironment()
         {
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.08f, 0.1f, 0.18f);
-            RenderSettings.ambientEquatorColor = new Color(0.05f, 0.06f, 0.12f);
-            RenderSettings.ambientGroundColor = new Color(0.02f, 0.02f, 0.05f);
+            RenderSettings.ambientSkyColor = new Color(0.06f, 0.08f, 0.16f);
+            RenderSettings.ambientEquatorColor = new Color(0.04f, 0.05f, 0.11f);
+            RenderSettings.ambientGroundColor = new Color(0.015f, 0.015f, 0.04f);
             RenderSettings.fog = true;
-            RenderSettings.fogColor = new Color(0.02f, 0.01f, 0.06f);
+            RenderSettings.fogColor = new Color(0.015f, 0.008f, 0.05f);
             RenderSettings.fogMode = FogMode.Exponential;
-            RenderSettings.fogDensity = 0.008f;
+            RenderSettings.fogDensity = 0.0065f;
         }
 
-        void SetupCamera()
+        void SetupOrbitCamera()
         {
             var cam = UnityEngine.Camera.main;
             if (cam == null)
@@ -107,34 +121,134 @@ namespace NeonLap.Core
 
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.02f, 0.01f, 0.05f);
-            cam.fieldOfView = 58f;
-            cam.transform.position = new Vector3(-6f, 11f, -34f);
-            cam.transform.rotation = Quaternion.Euler(12f, 18f, 0f);
+            cam.nearClipPlane = 0.3f;
+            cam.farClipPlane = 450f;
 
-            if (cam.GetComponent<MainMenuCameraDrift>() == null)
-                cam.gameObject.AddComponent<MainMenuCameraDrift>();
+            var drift = cam.GetComponent<MainMenuCameraDrift>();
+            if (drift != null)
+                Destroy(drift);
+
+            var orbit = cam.GetComponent<MainMenuOrbitCamera>();
+            if (orbit == null)
+                orbit = cam.gameObject.AddComponent<MainMenuOrbitCamera>();
+
+            if (playerShowcaseCar != null)
+                orbit.Configure(playerShowcaseCar);
         }
 
-        void SpawnRacingCars(List<Vector3> centerline)
+        void SpawnShowcaseCars(Vector3[] path)
         {
-            var path = centerline.ToArray();
             var carRoot = new GameObject("ShowcaseCars").transform;
             carRoot.SetParent(showcaseRoot, false);
 
-            for (var i = 0; i < BodyColors.Length; i++)
-            {
-                var car = new GameObject("ShowcaseCar_" + (i + 1));
-                car.transform.SetParent(carRoot, false);
-                car.transform.localScale = Vector3.one * 1.15f;
+            SpawnHeroCar(carRoot, path);
+            SpawnBackgroundRacers(carRoot, path);
+        }
 
-                HoverCarVisualBuilder.Build(car.transform,
-                    new HoverCarVisualBuilder.BuildArgs(bodyTemplate, accentTemplate, BodyColors[i], AccentColors[i]));
+        void SpawnHeroCar(Transform carRoot, Vector3[] path)
+        {
+            var heroProgress = 0.08f;
+            var heroPosition = SamplePath(path, heroProgress);
+            var heroLook = SamplePath(path, heroProgress + 0.02f);
+            var heroForward = heroLook - heroPosition;
+            heroForward.y = 0f;
+            if (heroForward.sqrMagnitude < 0.0001f)
+                heroForward = Vector3.forward;
+            var heroRotation = Quaternion.LookRotation(heroForward.normalized, Vector3.up);
+
+            var car = new GameObject("HeroCar");
+            car.transform.SetParent(carRoot, false);
+            car.transform.localScale = Vector3.one * 1.22f;
+
+            var build = PlayerGarageStore.GetSelectedBuild();
+            Color body;
+            Color accent;
+            HoverCarVisualBuilder.BuildArgs buildArgs;
+            if (build != null)
+            {
+                buildArgs = VehicleCustomizationStore.CreateBuildArgs(bodyTemplate, accentTemplate, build, true);
+                VehicleCustomizationStore.GetResolvedColors(build, out body, out accent);
+            }
+            else
+            {
+                body = PlayerVehicleProfileStore.GetBodyColor(PlayerVehicleProfileStore.SelectedKind);
+                accent = PlayerVehicleProfileStore.GetAccentColor(PlayerVehicleProfileStore.SelectedKind);
+                buildArgs = VehicleCustomizationStore.CreateBuildArgs(bodyTemplate, accentTemplate, body, accent, true);
+            }
+
+            HoverCarVisualBuilder.Build(car.transform, buildArgs);
+            AddCarTrail(car.transform, accent);
+
+            var idle = car.AddComponent<MainMenuHeroCarIdle>();
+            idle.SnapToPose(heroPosition + Vector3.up * 1.38f, heroRotation);
+            playerShowcaseCar = car.transform;
+        }
+
+        void SpawnBackgroundRacers(Transform carRoot, Vector3[] path)
+        {
+            const int backgroundCount = 4;
+            for (var i = 0; i < backgroundCount; i++)
+            {
+                var paletteIndex = (i + 1) % BodyColors.Length;
+                var car = new GameObject("BackgroundCar_" + (i + 1));
+                car.transform.SetParent(carRoot, false);
+                car.transform.localScale = Vector3.one * 1.05f;
+
+                var body = BodyColors[paletteIndex];
+                var accent = AccentColors[paletteIndex];
+                var buildArgs = new HoverCarVisualBuilder.BuildArgs(bodyTemplate, accentTemplate, body, accent);
+                HoverCarVisualBuilder.Build(car.transform, buildArgs);
 
                 var racer = car.AddComponent<MainMenuCarRacer>();
-                racer.Configure(path, i / (float)BodyColors.Length, 0.055f + i * 0.004f, 1.35f);
-
-                AddCarTrail(car.transform, AccentColors[i]);
+                var start = 0.22f + i * 0.17f;
+                racer.Configure(path, start, 0.045f + i * 0.006f, 1.32f);
+                AddCarTrail(car.transform, accent);
             }
+        }
+
+        static Vector3 SamplePath(Vector3[] path, float t)
+        {
+            if (path == null || path.Length < 2)
+                return Vector3.zero;
+
+            var scaled = Mathf.Repeat(t, 1f) * path.Length;
+            var index = Mathf.FloorToInt(scaled) % path.Length;
+            var nextIndex = (index + 1) % path.Length;
+            var localT = scaled - Mathf.Floor(scaled);
+            return Vector3.Lerp(path[index], path[nextIndex], localT);
+        }
+
+        public void ApplyGaragePreview(HoverBuildDefinition build)
+        {
+            if (playerShowcaseCar == null || build == null)
+                return;
+
+            var visual = playerShowcaseCar.Find("Visual");
+            if (visual != null)
+                Destroy(visual.gameObject);
+
+            HoverCarVisualBuilder.Build(playerShowcaseCar,
+                VehicleCustomizationStore.CreateBuildArgs(bodyTemplate, accentTemplate, build, true));
+
+            var orbit = Object.FindAnyObjectByType<MainMenuOrbitCamera>();
+            orbit?.Configure(playerShowcaseCar);
+        }
+
+        public void ApplyProfilePreview(VehicleProfileKind kind)
+        {
+            if (playerShowcaseCar == null)
+                return;
+
+            var visual = playerShowcaseCar.Find("Visual");
+            if (visual != null)
+                Destroy(visual.gameObject);
+
+            HoverCarVisualBuilder.Build(playerShowcaseCar,
+                new HoverCarVisualBuilder.BuildArgs(
+                    bodyTemplate,
+                    accentTemplate,
+                    PlayerVehicleProfileStore.GetBodyColor(kind),
+                    PlayerVehicleProfileStore.GetAccentColor(kind)));
         }
 
         void AddCarTrail(Transform car, Color accent)
@@ -153,16 +267,70 @@ namespace NeonLap.Core
             trail.endColor = new Color(accent.r, accent.g, accent.b, 0f);
         }
 
-        void BuildTrack(List<Vector3> centerline)
+        void BuildGroundPlane()
         {
-            const float trackWidth = 12f;
+            var ground = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            ground.name = "ShowcaseGround";
+            ground.transform.SetParent(showcaseRoot, false);
+            ground.transform.position = new Vector3(0f, -0.35f, 0f);
+            ground.transform.localScale = new Vector3(140f, 0.08f, 110f);
+            Object.Destroy(ground.GetComponent<Collider>());
+
+            var groundMat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            groundMat.SetColor("_BaseColor", new Color(0.025f, 0.02f, 0.05f));
+            groundMat.SetFloat("_Smoothness", 0.2f);
+            ground.GetComponent<Renderer>().sharedMaterial = groundMat;
+        }
+
+        void BuildNeonArch(Vector3[] centerline)
+        {
+            if (centerline == null || centerline.Length < 2)
+                return;
+
+            var archRoot = new GameObject("HeroArch").transform;
+            archRoot.SetParent(showcaseRoot, false);
+
+            var start = SamplePath(centerline, 0.08f);
+            var next = SamplePath(centerline, 0.1f);
+            var forward = (next - start).normalized;
+            var right = Vector3.Cross(Vector3.up, forward).normalized;
+            var archCenter = start + Vector3.up * 0.2f;
+
+            CreateArchPillar(archRoot, archCenter + right * 7.2f, forward, 9.5f);
+            CreateArchPillar(archRoot, archCenter - right * 7.2f, forward, 9.5f);
+
+            var beam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            beam.name = "ArchBeam";
+            beam.transform.SetParent(archRoot, false);
+            beam.transform.position = archCenter + Vector3.up * 9.2f;
+            beam.transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+            beam.transform.localScale = new Vector3(15.5f, 0.45f, 0.7f);
+            Object.Destroy(beam.GetComponent<Collider>());
+            beam.GetComponent<Renderer>().sharedMaterial = archMat;
+        }
+
+        void CreateArchPillar(Transform parent, Vector3 basePosition, Vector3 forward, float height)
+        {
+            var pillar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            pillar.name = "ArchPillar";
+            pillar.transform.SetParent(parent, false);
+            pillar.transform.position = basePosition + Vector3.up * (height * 0.5f);
+            pillar.transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+            pillar.transform.localScale = new Vector3(0.55f, height, 0.55f);
+            Object.Destroy(pillar.GetComponent<Collider>());
+            pillar.GetComponent<Renderer>().sharedMaterial = archMat;
+        }
+
+        void BuildTrack(Vector3[] centerline)
+        {
+            const float trackWidth = 13f;
             var trackRoot = new GameObject("ShowcaseTrack").transform;
             trackRoot.SetParent(showcaseRoot, false);
 
-            for (var i = 0; i < centerline.Count; i++)
+            for (var i = 0; i < centerline.Length; i++)
             {
                 var a = centerline[i];
-                var b = centerline[(i + 1) % centerline.Count];
+                var b = centerline[(i + 1) % centerline.Length];
                 CreateTrackSegment(trackRoot, a, b, trackWidth, trackSurfaceMat);
                 CreateEdgeStrip(trackRoot, a, b, trackWidth * 0.5f - 0.25f, trackEdgeMat);
                 CreateEdgeStrip(trackRoot, a, b, -(trackWidth * 0.5f - 0.25f), trackEdgeMat);
@@ -191,11 +359,11 @@ namespace NeonLap.Core
             cityRoot.SetParent(showcaseRoot, false);
             var random = new System.Random(1337);
 
-            for (var i = 0; i < 22; i++)
+            for (var i = 0; i < 32; i++)
             {
                 var angle = (float)random.NextDouble() * Mathf.PI * 2f;
-                var radius = 38f + (float)random.NextDouble() * 28f;
-                var height = 10f + (float)random.NextDouble() * 28f;
+                var radius = 42f + (float)random.NextDouble() * 36f;
+                var height = 12f + (float)random.NextDouble() * 34f;
                 var x = Mathf.Cos(angle) * radius;
                 var z = Mathf.Sin(angle) * radius * 0.75f;
 
@@ -212,14 +380,14 @@ namespace NeonLap.Core
             }
         }
 
-        void BuildShowcaseLights(List<Vector3> centerline)
+        void BuildShowcaseLights(Vector3[] centerline)
         {
             var lightsRoot = new GameObject("ShowcaseLights").transform;
             lightsRoot.SetParent(showcaseRoot, false);
 
-            for (var i = 0; i < centerline.Count; i += 4)
+            for (var i = 0; i < centerline.Length; i += 3)
             {
-                var point = centerline[i] + Vector3.up * 7f;
+                var point = centerline[i] + Vector3.up * 8f;
                 var lightGo = new GameObject("TrackLight_" + i);
                 lightGo.transform.SetParent(lightsRoot, false);
                 lightGo.transform.position = point;
@@ -227,17 +395,49 @@ namespace NeonLap.Core
                 var light = lightGo.AddComponent<Light>();
                 light.type = LightType.Point;
                 light.color = new Color(0.55f, 0.9f, 1f);
-                light.intensity = 2.4f;
-                light.range = 28f;
+                light.intensity = 2.8f;
+                light.range = 32f;
             }
+
+            var heroPoint = SamplePath(centerline, 0.08f) + Vector3.up * 2.5f;
+            var heroLightGo = new GameObject("HeroSpotlight");
+            heroLightGo.transform.SetParent(lightsRoot, false);
+            heroLightGo.transform.position = heroPoint + new Vector3(4f, 6f, -5f);
+            heroLightGo.transform.LookAt(heroPoint + Vector3.up * 1.2f);
+            var heroLight = heroLightGo.AddComponent<Light>();
+            heroLight.type = LightType.Spot;
+            heroLight.color = new Color(0.75f, 0.95f, 1f);
+            heroLight.intensity = 3.2f;
+            heroLight.range = 40f;
+            heroLight.spotAngle = 48f;
+            heroLight.innerSpotAngle = 18f;
+
+            var rimGo = new GameObject("HeroRimLight");
+            rimGo.transform.SetParent(lightsRoot, false);
+            rimGo.transform.position = heroPoint + new Vector3(-7f, 4f, 6f);
+            rimGo.transform.LookAt(heroPoint + Vector3.up * 1f);
+            var rim = rimGo.AddComponent<Light>();
+            rim.type = LightType.Spot;
+            rim.color = new Color(1f, 0.45f, 0.85f);
+            rim.intensity = 2.1f;
+            rim.range = 35f;
+            rim.spotAngle = 55f;
 
             var keyGo = new GameObject("KeyLight");
             keyGo.transform.SetParent(lightsRoot, false);
-            keyGo.transform.rotation = Quaternion.Euler(35f, -25f, 0f);
+            keyGo.transform.rotation = Quaternion.Euler(42f, -32f, 0f);
             var key = keyGo.AddComponent<Light>();
             key.type = LightType.Directional;
-            key.color = new Color(0.65f, 0.78f, 1f);
-            key.intensity = 0.55f;
+            key.color = new Color(0.7f, 0.82f, 1f);
+            key.intensity = 0.62f;
+
+            var fillGo = new GameObject("FillLight");
+            fillGo.transform.SetParent(lightsRoot, false);
+            fillGo.transform.rotation = Quaternion.Euler(18f, 140f, 0f);
+            var fill = fillGo.AddComponent<Light>();
+            fill.type = LightType.Directional;
+            fill.color = new Color(0.35f, 0.55f, 1f);
+            fill.intensity = 0.28f;
         }
 
         static void CreateTrackSegment(Transform parent, Vector3 a, Vector3 b, float width, Material material)
@@ -273,17 +473,35 @@ namespace NeonLap.Core
             strip.GetComponent<Renderer>().sharedMaterial = material;
         }
 
-        static List<Vector3> BuildCenterline(float straightLength, float turnRadius)
+        static Vector3[] BuildDramaticCenterline()
         {
             var points = new List<Vector3>();
+            const float straightLength = 64f;
+            const float turnRadius = 21f;
             var half = straightLength * 0.5f;
 
-            AppendStraight(points, new Vector3(-half, 0f, turnRadius), new Vector3(half, 0f, turnRadius), 4);
-            AppendArc(points, new Vector3(half, 0f, 0f), turnRadius, 90f, -90f, 12);
-            AppendStraight(points, new Vector3(half, 0f, -turnRadius), new Vector3(-half, 0f, -turnRadius), 4);
-            AppendArc(points, new Vector3(-half, 0f, 0f), turnRadius, -90f, -270f, 12);
+            AppendStraight(points, new Vector3(-half, 0f, turnRadius), new Vector3(half, 0f, turnRadius), 6);
+            AppendArc(points, new Vector3(half, 0f, 0f), turnRadius, 90f, -90f, 16);
+            AppendStraight(points, new Vector3(half, 0f, -turnRadius), new Vector3(-half, 0f, -turnRadius), 6);
+            AppendArc(points, new Vector3(-half, 0f, 0f), turnRadius, -90f, -270f, 16);
 
-            return points;
+            ApplyElevationRidge(points, -turnRadius, turnRadius, 3.8f);
+            return points.ToArray();
+        }
+
+        static void ApplyElevationRidge(List<Vector3> points, float targetZ, float ridgeRadius, float ridgeHeight)
+        {
+            for (var i = 0; i < points.Count; i++)
+            {
+                var p = points[i];
+                var zDelta = Mathf.Abs(p.z - targetZ);
+                if (zDelta > ridgeRadius * 0.35f)
+                    continue;
+
+                var t = 1f - Mathf.Clamp01(zDelta / (ridgeRadius * 0.35f));
+                var lift = Mathf.SmoothStep(0f, ridgeHeight, t);
+                points[i] = new Vector3(p.x, p.y + lift, p.z);
+            }
         }
 
         static void AppendStraight(List<Vector3> points, Vector3 from, Vector3 to, int subdivisions)

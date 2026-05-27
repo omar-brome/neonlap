@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using NeonLap.Core;
+using NeonLap.Track;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -27,6 +28,7 @@ namespace NeonLap.VFX
         readonly List<Material> rainbowMaterials = new();
         readonly List<Color> rainbowBaseEmissions = new();
         Texture2D skyGradientTexture;
+        TrackThemeSky activeSky;
         Color rainySunCoreEmission;
         Color rainySunHaloEmission;
 
@@ -50,6 +52,16 @@ namespace NeonLap.VFX
             followTarget = target;
         }
 
+        public void ApplyTrackTheme(TrackThemeSky sky)
+        {
+            activeSky = sky;
+            if (skyMaterial == null)
+                return;
+
+            RefreshSkyGradientTexture();
+            SetCameraBackground(sky.CameraBackground);
+        }
+
         void Build(Transform cameraTransform)
         {
             followTarget = cameraTransform;
@@ -62,7 +74,7 @@ namespace NeonLap.VFX
                 BuildRainbow(Mathf.Lerp(0.55f, 1f, density));
 
             AlignDirectionalLight();
-            SetCameraBackground();
+            SetCameraBackground(new Color(0.08f, 0.05f, 0.14f));
         }
 
         void LateUpdate()
@@ -147,7 +159,8 @@ namespace NeonLap.VFX
             dome.transform.localScale = Vector3.one * DomeRadius * 2f;
             Object.Destroy(dome.GetComponent<Collider>());
 
-            skyGradientTexture = CreateSkyGradientTexture(4, 256);
+            activeSky = default;
+            skyGradientTexture = CreateSkyGradientTexture(4, 256, activeSky);
             skyMaterial = CreateSkyMaterial(skyGradientTexture);
             dome.GetComponent<MeshRenderer>().sharedMaterial = skyMaterial;
             dome.GetComponent<MeshRenderer>().shadowCastingMode = ShadowCastingMode.Off;
@@ -366,7 +379,20 @@ namespace NeonLap.VFX
             return mesh;
         }
 
-        static Texture2D CreateSkyGradientTexture(int width, int height)
+        void RefreshSkyGradientTexture()
+        {
+            if (skyGradientTexture != null)
+                Destroy(skyGradientTexture);
+
+            skyGradientTexture = CreateSkyGradientTexture(4, 256, activeSky);
+            if (skyMaterial != null)
+            {
+                skyMaterial.SetTexture("_BaseMap", skyGradientTexture);
+                skyMaterial.mainTexture = skyGradientTexture;
+            }
+        }
+
+        static Texture2D CreateSkyGradientTexture(int width, int height, TrackThemeSky sky)
         {
             var texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
             {
@@ -374,10 +400,17 @@ namespace NeonLap.VFX
                 filterMode = FilterMode.Bilinear,
             };
 
-            var zenith = new Color(0.05f, 0.06f, 0.2f);
-            var mid = new Color(0.16f, 0.12f, 0.38f);
-            var horizon = new Color(0.52f, 0.18f, 0.52f);
-            var sunGlow = new Color(0.95f, 0.42f, 0.28f);
+            var zenith = sky.Zenith;
+            var mid = sky.Mid;
+            var horizon = sky.Horizon;
+            var sunGlow = sky.SunGlow;
+            if (zenith == Color.clear)
+            {
+                zenith = new Color(0.05f, 0.06f, 0.2f);
+                mid = new Color(0.16f, 0.12f, 0.38f);
+                horizon = new Color(0.52f, 0.18f, 0.52f);
+                sunGlow = new Color(0.95f, 0.42f, 0.28f);
+            }
 
             for (var y = 0; y < height; y++)
             {
@@ -459,7 +492,7 @@ namespace NeonLap.VFX
             }
         }
 
-        static void SetCameraBackground()
+        static void SetCameraBackground(Color background)
         {
             var cameras = Object.FindObjectsByType<UnityEngine.Camera>(FindObjectsInactive.Exclude);
             foreach (var camera in cameras)
@@ -468,7 +501,7 @@ namespace NeonLap.VFX
                     continue;
 
                 camera.clearFlags = CameraClearFlags.SolidColor;
-                camera.backgroundColor = new Color(0.08f, 0.05f, 0.14f);
+                camera.backgroundColor = background;
             }
         }
 

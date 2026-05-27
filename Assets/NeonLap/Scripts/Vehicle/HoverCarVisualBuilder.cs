@@ -7,13 +7,15 @@ namespace NeonLap.Vehicle
         public readonly struct BuildArgs
         {
             public BuildArgs(Material bodyTemplate, Material accentTemplate, Color bodyColor, Color accentEmission,
-                bool isPlayer = false)
+                bool isPlayer = false, int decalStyle = 0, int rimStyle = 0)
             {
                 BodyTemplate = bodyTemplate;
                 AccentTemplate = accentTemplate;
                 BodyColor = bodyColor;
                 AccentEmission = accentEmission;
                 IsPlayer = isPlayer;
+                DecalStyle = decalStyle;
+                RimStyle = rimStyle;
             }
 
             public Material BodyTemplate { get; }
@@ -21,6 +23,8 @@ namespace NeonLap.Vehicle
             public Color BodyColor { get; }
             public Color AccentEmission { get; }
             public bool IsPlayer { get; }
+            public int DecalStyle { get; }
+            public int RimStyle { get; }
         }
 
         public static Transform Build(Transform root, BuildArgs args)
@@ -35,12 +39,13 @@ namespace NeonLap.Vehicle
             var carbonMat = CreateCarbonMaterial(args.BodyTemplate);
             var stripeMat = CreateStripeMaterial(args.BodyColor, args.AccentEmission, args.BodyTemplate);
 
-            BuildChassis(visualRoot, bodyMat, trimMat, carbonMat, stripeMat);
+            BuildChassis(visualRoot, bodyMat, trimMat, carbonMat, stripeMat, args.DecalStyle);
             BuildCockpit(visualRoot, bodyMat, accentMat, trimMat, glassMat);
             BuildAero(visualRoot, args, bodyMat, accentMat, trimMat, carbonMat);
-            BuildHoverPods(visualRoot, accentMat, trimMat, carbonMat);
+            BuildHoverPods(visualRoot, accentMat, trimMat, carbonMat, args.RimStyle);
             BuildLighting(visualRoot, accentMat, trimMat, carbonMat);
             BuildSurfaceDetails(visualRoot, bodyMat, accentMat, trimMat, carbonMat);
+            BuildDecals(visualRoot, args.DecalStyle, bodyMat, accentMat, stripeMat);
             MarkDetachableParts(visualRoot);
 
             return visualRoot;
@@ -80,7 +85,7 @@ namespace NeonLap.Vehicle
         }
 
         static void BuildChassis(Transform root, Material bodyMat, Material trimMat, Material carbonMat,
-            Material stripeMat)
+            Material stripeMat, int decalStyle)
         {
             AddPart(root, "Chassis", PrimitiveType.Cube,
                 new Vector3(0f, 0.14f, 0f), new Vector3(1.55f, 0.22f, 2.55f), Quaternion.identity, bodyMat);
@@ -118,8 +123,11 @@ namespace NeonLap.Vehicle
             AddPart(root, "SplitterStrutR", PrimitiveType.Cube,
                 new Vector3(0.48f, 0.1f, 1.22f), new Vector3(0.06f, 0.06f, 0.18f), Quaternion.identity, trimMat);
 
-            AddPart(root, "HoodStripe", PrimitiveType.Cube,
-                new Vector3(0f, 0.26f, 0.72f), new Vector3(0.12f, 0.02f, 1.05f), Quaternion.identity, stripeMat);
+            if (decalStyle == 1)
+            {
+                AddPart(root, "HoodStripe", PrimitiveType.Cube,
+                    new Vector3(0f, 0.26f, 0.72f), new Vector3(0.12f, 0.02f, 1.05f), Quaternion.identity, stripeMat);
+            }
         }
 
         static void BuildCockpit(Transform root, Material bodyMat, Material accentMat, Material trimMat,
@@ -269,12 +277,53 @@ namespace NeonLap.Vehicle
                 Quaternion.Euler(16f, 0f, 0f), accentMat);
         }
 
-        static void BuildHoverPods(Transform root, Material accentMat, Material trimMat, Material carbonMat)
+        static void BuildHoverPods(Transform root, Material accentMat, Material trimMat, Material carbonMat,
+            int rimStyle)
         {
-            AddHoverPod(root, "PodFL", new Vector3(-0.62f, 0.06f, 0.85f), accentMat, trimMat, carbonMat, true);
-            AddHoverPod(root, "PodFR", new Vector3(0.62f, 0.06f, 0.85f), accentMat, trimMat, carbonMat, true);
-            AddHoverPod(root, "PodRL", new Vector3(-0.62f, 0.06f, -0.85f), accentMat, trimMat, carbonMat, false);
-            AddHoverPod(root, "PodRR", new Vector3(0.62f, 0.06f, -0.85f), accentMat, trimMat, carbonMat, false);
+            AddHoverPod(root, "PodFL", new Vector3(-0.62f, 0.06f, 0.85f), accentMat, trimMat, carbonMat, true, rimStyle);
+            AddHoverPod(root, "PodFR", new Vector3(0.62f, 0.06f, 0.85f), accentMat, trimMat, carbonMat, true, rimStyle);
+            AddHoverPod(root, "PodRL", new Vector3(-0.62f, 0.06f, -0.85f), accentMat, trimMat, carbonMat, false, rimStyle);
+            AddHoverPod(root, "PodRR", new Vector3(0.62f, 0.06f, -0.85f), accentMat, trimMat, carbonMat, false, rimStyle);
+        }
+
+        static void BuildDecals(Transform root, int decalStyle, Material bodyMat, Material accentMat,
+            Material stripeMat)
+        {
+            switch (decalStyle)
+            {
+                case 2:
+                    AddPart(root, "DecalStripeL", PrimitiveType.Cube,
+                        new Vector3(-0.22f, 0.27f, 0.55f), new Vector3(0.06f, 0.02f, 1.2f), Quaternion.identity,
+                        stripeMat);
+                    AddPart(root, "DecalStripeR", PrimitiveType.Cube,
+                        new Vector3(0.22f, 0.27f, 0.55f), new Vector3(0.06f, 0.02f, 1.2f), Quaternion.identity,
+                        stripeMat);
+                    break;
+                case 3:
+                    AddPart(root, "DecalChevronL", PrimitiveType.Cube,
+                        new Vector3(-0.18f, 0.24f, 1.05f), new Vector3(0.08f, 0.02f, 0.42f),
+                        Quaternion.Euler(-12f, -18f, 0f), accentMat);
+                    AddPart(root, "DecalChevronR", PrimitiveType.Cube,
+                        new Vector3(0.18f, 0.24f, 1.05f), new Vector3(0.08f, 0.02f, 0.42f),
+                        Quaternion.Euler(-12f, 18f, 0f), accentMat);
+                    AddPart(root, "DecalChevronC", PrimitiveType.Cube,
+                        new Vector3(0f, 0.25f, 1.12f), new Vector3(0.1f, 0.02f, 0.28f),
+                        Quaternion.Euler(-10f, 0f, 0f), stripeMat);
+                    break;
+                case 4:
+                    AddPart(root, "DecalTagHood", PrimitiveType.Cube,
+                        new Vector3(0f, 0.28f, 0.35f), new Vector3(0.42f, 0.03f, 0.22f), Quaternion.identity,
+                        accentMat);
+                    AddPart(root, "DecalTagSideL", PrimitiveType.Cube,
+                        new Vector3(-0.7f, 0.27f, -0.05f), new Vector3(0.03f, 0.16f, 0.55f),
+                        Quaternion.Euler(0f, 0f, 8f), stripeMat);
+                    AddPart(root, "DecalTagSideR", PrimitiveType.Cube,
+                        new Vector3(0.7f, 0.27f, -0.05f), new Vector3(0.03f, 0.16f, 0.55f),
+                        Quaternion.Euler(0f, 0f, -8f), stripeMat);
+                    AddPart(root, "DecalTagN", PrimitiveType.Cube,
+                        new Vector3(0f, 0.23f, 1.26f), new Vector3(0.22f, 0.05f, 0.05f), Quaternion.identity, accentMat);
+                    break;
+            }
         }
 
         static void BuildLighting(Transform root, Material accentMat, Material trimMat, Material carbonMat)
@@ -368,7 +417,7 @@ namespace NeonLap.Vehicle
         }
 
         static void AddHoverPod(Transform parent, string name, Vector3 position, Material accentMat, Material trimMat,
-            Material carbonMat, bool steerable)
+            Material carbonMat, bool steerable, int rimStyle)
         {
             AddPart(parent, name + "Arm", PrimitiveType.Cube,
                 position + new Vector3(0f, 0.04f, 0f), new Vector3(0.12f, 0.06f, 0.12f), Quaternion.identity, trimMat);
@@ -380,26 +429,57 @@ namespace NeonLap.Vehicle
             else
                 spinRoot = wheelRoot;
 
-            AddPart(spinRoot, name + "Housing", PrimitiveType.Cylinder,
-                Vector3.zero, new Vector3(0.36f, 0.06f, 0.36f), Quaternion.identity, carbonMat);
-            AddPart(spinRoot, name + "Ring", PrimitiveType.Cylinder,
-                new Vector3(0f, -0.01f, 0f), new Vector3(0.42f, 0.015f, 0.42f),
-                Quaternion.identity, trimMat);
-            AddPart(spinRoot, name + "Glow", PrimitiveType.Cylinder,
-                new Vector3(0f, -0.035f, 0f), new Vector3(0.26f, 0.025f, 0.26f),
-                Quaternion.identity, accentMat);
-            AddPart(spinRoot, name + "Core", PrimitiveType.Sphere,
-                new Vector3(0f, -0.04f, 0f), new Vector3(0.12f, 0.04f, 0.12f),
-                Quaternion.identity, accentMat);
-
-            AddPart(spinRoot, name + "VaneN", PrimitiveType.Cube,
-                new Vector3(0f, 0.02f, 0.2f), new Vector3(0.04f, 0.06f, 0.1f), Quaternion.identity, trimMat);
-            AddPart(spinRoot, name + "VaneS", PrimitiveType.Cube,
-                new Vector3(0f, 0.02f, -0.2f), new Vector3(0.04f, 0.06f, 0.1f), Quaternion.identity, trimMat);
-            AddPart(spinRoot, name + "VaneE", PrimitiveType.Cube,
-                new Vector3(0.2f, 0.02f, 0f), new Vector3(0.1f, 0.06f, 0.04f), Quaternion.identity, trimMat);
-            AddPart(spinRoot, name + "VaneW", PrimitiveType.Cube,
-                new Vector3(-0.2f, 0.02f, 0f), new Vector3(0.1f, 0.06f, 0.04f), Quaternion.identity, trimMat);
+            switch (rimStyle)
+            {
+                case 1:
+                    AddPart(spinRoot, name + "Housing", PrimitiveType.Cylinder,
+                        Vector3.zero, new Vector3(0.32f, 0.04f, 0.32f), Quaternion.identity, carbonMat);
+                    AddPart(spinRoot, name + "Ring", PrimitiveType.Cylinder,
+                        new Vector3(0f, -0.01f, 0f), new Vector3(0.46f, 0.01f, 0.46f),
+                        Quaternion.identity, accentMat);
+                    AddPart(spinRoot, name + "Core", PrimitiveType.Sphere,
+                        new Vector3(0f, -0.035f, 0f), new Vector3(0.08f, 0.03f, 0.08f),
+                        Quaternion.identity, accentMat);
+                    break;
+                case 2:
+                    AddPart(spinRoot, name + "Housing", PrimitiveType.Cylinder,
+                        Vector3.zero, new Vector3(0.34f, 0.08f, 0.34f), Quaternion.identity, trimMat);
+                    AddPart(spinRoot, name + "Ring", PrimitiveType.Cylinder,
+                        new Vector3(0f, -0.02f, 0f), new Vector3(0.4f, 0.03f, 0.4f),
+                        Quaternion.identity, carbonMat);
+                    break;
+                case 3:
+                    AddPart(spinRoot, name + "Housing", PrimitiveType.Cylinder,
+                        Vector3.zero, new Vector3(0.28f, 0.05f, 0.28f), Quaternion.identity, carbonMat);
+                    AddPart(spinRoot, name + "Glow", PrimitiveType.Cylinder,
+                        new Vector3(0f, -0.03f, 0f), new Vector3(0.44f, 0.035f, 0.44f),
+                        Quaternion.identity, accentMat);
+                    AddPart(spinRoot, name + "Core", PrimitiveType.Sphere,
+                        new Vector3(0f, -0.04f, 0f), new Vector3(0.16f, 0.05f, 0.16f),
+                        Quaternion.identity, accentMat);
+                    break;
+                default:
+                    AddPart(spinRoot, name + "Housing", PrimitiveType.Cylinder,
+                        Vector3.zero, new Vector3(0.36f, 0.06f, 0.36f), Quaternion.identity, carbonMat);
+                    AddPart(spinRoot, name + "Ring", PrimitiveType.Cylinder,
+                        new Vector3(0f, -0.01f, 0f), new Vector3(0.42f, 0.015f, 0.42f),
+                        Quaternion.identity, trimMat);
+                    AddPart(spinRoot, name + "Glow", PrimitiveType.Cylinder,
+                        new Vector3(0f, -0.035f, 0f), new Vector3(0.26f, 0.025f, 0.26f),
+                        Quaternion.identity, accentMat);
+                    AddPart(spinRoot, name + "Core", PrimitiveType.Sphere,
+                        new Vector3(0f, -0.04f, 0f), new Vector3(0.12f, 0.04f, 0.12f),
+                        Quaternion.identity, accentMat);
+                    AddPart(spinRoot, name + "VaneN", PrimitiveType.Cube,
+                        new Vector3(0f, 0.02f, 0.2f), new Vector3(0.04f, 0.06f, 0.1f), Quaternion.identity, trimMat);
+                    AddPart(spinRoot, name + "VaneS", PrimitiveType.Cube,
+                        new Vector3(0f, 0.02f, -0.2f), new Vector3(0.04f, 0.06f, 0.1f), Quaternion.identity, trimMat);
+                    AddPart(spinRoot, name + "VaneE", PrimitiveType.Cube,
+                        new Vector3(0.2f, 0.02f, 0f), new Vector3(0.1f, 0.06f, 0.04f), Quaternion.identity, trimMat);
+                    AddPart(spinRoot, name + "VaneW", PrimitiveType.Cube,
+                        new Vector3(-0.2f, 0.02f, 0f), new Vector3(0.1f, 0.06f, 0.04f), Quaternion.identity, trimMat);
+                    break;
+            }
         }
 
         static Transform CreatePivot(Transform parent, string name, Vector3 localPosition)

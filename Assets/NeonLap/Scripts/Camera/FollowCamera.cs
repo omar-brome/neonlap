@@ -52,7 +52,7 @@ namespace NeonLap.Camera
         {
             FollowCameraMode.FirstPerson => "HOOD CAM",
             FollowCameraMode.CloseThirdPerson => "CLOSE CAM",
-            _ => "CHASE CAM",
+            _ => "FOLLOW CAM",
         };
 
         void Awake()
@@ -67,6 +67,9 @@ namespace NeonLap.Camera
             if (target == null || !enabled)
                 return;
 
+            if (CameraSpectacleDirector.Instance != null && CameraSpectacleDirector.Instance.IsOverridingFollow)
+                return;
+
             if (vehicle == null)
                 vehicle = target.GetComponent<VehicleController>();
             if (inputReader == null)
@@ -75,7 +78,12 @@ namespace NeonLap.Camera
             if (modeSwitchCooldown > 0f)
                 modeSwitchCooldown -= Time.deltaTime;
 
-            if (inputReader != null && inputReader.SwitchCameraPressed && modeSwitchCooldown <= 0f)
+            var switchCamera = inputReader != null && inputReader.SwitchCameraPressed;
+            var composite = target.GetComponent<CompositeVehicleInputProvider>();
+            if (composite != null && composite.SwitchCameraPressed)
+                switchCamera = true;
+
+            if (switchCamera && modeSwitchCooldown <= 0f)
             {
                 CycleMode();
                 modeSwitchCooldown = 0.2f;
@@ -93,7 +101,8 @@ namespace NeonLap.Camera
 
             var speed = vehicle != null ? vehicle.CurrentSpeed : 0f;
             var steer = vehicle != null ? vehicle.SteerInput : 0f;
-            var speedRatio = Mathf.Clamp01(speed / 45f);
+            var maxSpeed = vehicle != null && vehicle.Profile != null ? vehicle.Profile.maxSpeed : 45f;
+            var speedRatio = Mathf.Clamp01(speed / Mathf.Max(maxSpeed, 1f));
             var rollScale = Mathf.Lerp(1f, 0.25f, lookBackBlend);
 
             var desiredPosition = target.TransformPoint(smoothedOffset);
@@ -123,7 +132,7 @@ namespace NeonLap.Camera
 
             transform.rotation = Quaternion.Slerp(transform.rotation, desiredRotation, profile.RotationSmooth * Time.deltaTime);
 
-            var fovT = Mathf.Clamp01(speed / 45f);
+            var fovT = Mathf.Clamp01(speed / Mathf.Max(maxSpeed, 1f));
             var baseFov = Mathf.Lerp(profile.BaseFov, profile.BaseFov + 6f, lookBackBlend);
             cam.fieldOfView = Mathf.Lerp(baseFov, profile.MaxFov, fovT);
         }

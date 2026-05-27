@@ -5,6 +5,8 @@ namespace NeonLap.Vehicle
     [RequireComponent(typeof(Rigidbody))]
     public class VehicleSlipEffect : MonoBehaviour
     {
+        public event System.Action SlipApplied;
+
         [SerializeField] float bananaGripMultiplier = 0.07f;
         [SerializeField] float bananaSlipDuration = 1.35f;
         [SerializeField] float retriggerCooldown = 0.4f;
@@ -16,6 +18,8 @@ namespace NeonLap.Vehicle
 
         public float GripMultiplier => Time.time < slipEndTime ? activeGripMultiplier : 1f;
         public bool IsSlipping => Time.time < slipEndTime;
+        public float SlipTimeRemaining => Mathf.Max(0f, slipEndTime - Time.time);
+        public float SlipDuration => bananaSlipDuration;
 
         void Awake()
         {
@@ -33,12 +37,17 @@ namespace NeonLap.Vehicle
             if (rb == null || rb.isKinematic)
                 return;
 
+            var shield = GetComponent<VehicleCombatShield>();
+            if (shield != null && shield.TryAbsorbHit())
+                return;
+
             if (Time.time - lastSlipTime < retriggerCooldown)
                 return;
 
             lastSlipTime = Time.time;
             slipEndTime = Time.time + bananaSlipDuration;
             activeGripMultiplier = bananaGripMultiplier;
+            SlipApplied?.Invoke();
 
             var toCar = transform.position - worldPosition;
             toCar.y = 0f;

@@ -1,14 +1,18 @@
 using System.Collections.Generic;
 using NeonLap.Audio;
 using NeonLap.Camera;
-using NeonLap.Core;
-using NeonLap.Environment;
+using NeonLap.Core.Content;
 using NeonLap.Input;
+using NeonLap.Core;
+using NeonLap.Services;
+using NeonLap.Services.Race;
+using NeonLap.Environment;
 using NeonLap.Race;
 using NeonLap.Track;
 using NeonLap.UI;
-using NeonLap.VFX;
 using NeonLap.Vehicle;
+using NeonLap.Rendering;
+using NeonLap.VFX;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -35,60 +39,63 @@ namespace NeonLap.Core
         [SerializeField] int aiRivalCount = 9;
         [SerializeField] bool createUi = true;
 
+        [Header("Production (optional prefabs)")]
+        [SerializeField] NeonLapContentCatalog contentCatalog;
+
         static readonly Color PlayerBodyColor = new(0.1f, 0.35f, 0.45f);
         static readonly Color PlayerAccentColor = new(0f, 3.5f, 4f);
-
-        static readonly Color[] RivalBodyColors =
-        {
-            new(0.45f, 0.08f, 0.08f),
-            new(0.45f, 0.22f, 0.05f),
-            new(0.4f, 0.38f, 0.06f),
-            new(0.08f, 0.38f, 0.12f),
-            new(0.08f, 0.15f, 0.42f),
-            new(0.28f, 0.08f, 0.42f),
-            new(0.42f, 0.1f, 0.32f),
-            new(0.38f, 0.32f, 0.08f),
-            new(0.35f, 0.35f, 0.38f),
-        };
-
-        static readonly Color[] RivalAccentColors =
-        {
-            new(4f, 0.3f, 0.3f),
-            new(4f, 1.6f, 0.2f),
-            new(3.8f, 3.5f, 0.3f),
-            new(0.4f, 4f, 0.8f),
-            new(0.5f, 1.2f, 4f),
-            new(2.5f, 0.4f, 4f),
-            new(4f, 0.5f, 2.8f),
-            new(3.5f, 2.8f, 0.4f),
-            new(3f, 3f, 3.5f),
-        };
 
         GameObject playerCar;
         OvalTrackBuilder trackBuilder;
         RaceManager raceManager;
+        PoliceChaseSystem policeChase;
         RaceEnvironmentBuilder environmentBuilder;
 
         void Awake()
         {
+            GameAudioSettings.Load();
+            NeonLap.Audio.NeonLapAudioLibrary.Preload();
             GameQualitySettings.Load();
             GameDifficultySettings.Load();
             GameLapSettings.Load();
             GamePoliceSettings.Load();
+            GameHapticsSettings.Load();
+            GameMinimapSettings.Load();
+            GameRaceModeSettings.Load();
+            GameTeamRaceSettings.Load();
+            GameTrackOptions.Load();
+            GameAccessibilitySettings.Load();
+            NeonLapServicesBootstrap.EnsureInitialized();
+            contentCatalog ??= NeonLapContentCatalog.LoadDefault();
             EnsureRuntimeDefaults();
-            ApplyEnvironmentSettings();
             EnsurePhysicsLayerCollisions();
             EnsureGameManager();
             ResolveActiveTrackDefinition();
+            ApplyEnvironmentSettings();
             BuildTrack();
+            EnsurePerformanceSystems();
+            ApplyTrackVisualTheme();
+            WetTrackSurfaceController.Register(trackSurfaceMaterial);
+            var nightLevelIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+            NightTrackVisuals.Apply(trackEdgeMaterial, nightLevelIndex);
             BuildEnvironment();
-            BuildTrackHazards();
+            var modeRules = GameRaceModeSettings.Rules;
+            if (modeRules.SpawnTrackObstacles)
+            {
+                BuildTrackHazards();
+                BuildBananaHazards();
+            }
+
             BuildNitroPickups();
-            BuildBananaHazards();
+            BuildFuelPads();
+            if (RaceModeDamageRules.GetDamageProfile().SpawnRepairPads)
+                BuildRepairPads();
             SpawnRacers();
+            ConfigureElevationProbes();
             SetupCamera();
             SetupRaceSystems();
-            SpawnPatrolHelicopter();
+            if (GameRaceModeSettings.Rules.SpawnHelicopter)
+                SpawnPatrolHelicopter();
         }
 
         void EnsureRuntimeDefaults()
@@ -136,14 +143,21 @@ namespace NeonLap.Core
         void ApplyEnvironmentSettings()
         {
             var preset = GameQualitySettings.Preset;
+            var mainCamera = UnityEngine.Camera.main;
+            TrackThemeApplicator.Apply(trackDefinition, preset, mainCamera);
+            EnsureDynamicWeather(mainCamera != null ? mainCamera.transform : null, preset);
+        }
 
-            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.12f, 0.14f, 0.22f);
-            RenderSettings.ambientEquatorColor = new Color(0.08f, 0.09f, 0.14f);
-            RenderSettings.ambientGroundColor = new Color(0.03f, 0.03f, 0.06f);
-            GameQualitySettings.ApplyFogAndLighting(preset.FogDensity, preset.LightIntensity);
-            SkyGraphicsSystem.Ensure(UnityEngine.Camera.main);
-            EnsureDynamicWeather(UnityEngine.Camera.main != null ? UnityEngine.Camera.main.transform : null, preset);
+        void ApplyTrackVisualTheme()
+        {
+            if (trackDefinition == null)
+                return;
+
+            var profile = TrackThemeProfile.ForDefinition(trackDefinition);
+            TrackRoadMarkingBuilder.ApplyAsphaltLook(trackSurfaceMaterial, trackEdgeMaterial, profile.AsphaltColor,
+                profile.CurbColor);
+            TrackRoadMarkingBuilder.ApplyNeonEdgeLook(trackEdgeMaterial, profile.EdgeEmissionColor,
+                profile.EdgeBaseColor);
         }
 
         static void EnsureDynamicWeather(Transform cameraTransform, QualityPreset preset)
@@ -187,8 +201,11 @@ namespace NeonLap.Core
 
             GameManager.Instance.SetFallbackTrack(trackDefinition);
             var activeTrack = GameManager.Instance.GetCurrentTrackDefinition();
-            if (activeTrack != null)
-                trackDefinition = activeTrack;
+            if (activeTrack == null)
+                return;
+
+            trackDefinition = activeTrack;
+            trackDefinition.layout = TrackLayoutUtility.LayoutForLevelIndex(GameManager.Instance.CurrentLevelIndex);
         }
 
         void BuildEnvironment()
@@ -196,7 +213,7 @@ namespace NeonLap.Core
             var envGo = new GameObject("RaceEnvironment");
             environmentBuilder = envGo.AddComponent<RaceEnvironmentBuilder>();
             environmentBuilder.Build(trackDefinition, trackBuilder.StartPosition, trackBuilder.StartRotation,
-                trackBuilder.EnvironmentHalfExtents, GameQualitySettings.Preset);
+                trackBuilder.EnvironmentHalfExtents, GameQualitySettings.Preset, trackBuilder.CenterlinePoints);
         }
 
         void BuildTrackHazards()
@@ -209,6 +226,30 @@ namespace NeonLap.Core
         {
             var pickupBuilder = trackBuilder.gameObject.AddComponent<NitroPickupBuilder>();
             pickupBuilder.Build(trackBuilder.AiWaypointTransforms, trackDefinition);
+            pickupBuilder.BuildAiNitroZones(trackBuilder.AiWaypointTransforms, trackDefinition);
+        }
+
+        void BuildFuelPads()
+        {
+            var padBuilder = trackBuilder.gameObject.AddComponent<FuelPadPickupBuilder>();
+            padBuilder.Build(trackBuilder.AiWaypointTransforms, trackDefinition);
+        }
+
+        void BuildRepairPads()
+        {
+            var padBuilder = trackBuilder.gameObject.AddComponent<RepairPadPickupBuilder>();
+            padBuilder.Build(trackBuilder.AiWaypointTransforms, trackDefinition);
+        }
+
+        void EnsurePerformanceSystems()
+        {
+            if (trackBuilder == null)
+                return;
+
+            var raceRoot = trackBuilder.transform;
+            VehicleDamageDebrisPool.Ensure(raceRoot);
+            BananaHazardPool.Ensure(raceRoot);
+            NeonTrackEdgePulseDriver.Ensure(trackEdgeMaterial);
         }
 
         void BuildBananaHazards()
@@ -225,6 +266,15 @@ namespace NeonLap.Core
             trackBuilder.BuildTrack();
         }
 
+        void ConfigureElevationProbes()
+        {
+            if (trackDefinition == null || !TrackLayoutUtility.HasElevation(trackDefinition.layout))
+                return;
+
+            foreach (var probe in FindObjectsByType<VehicleGroundProbe>(FindObjectsInactive.Exclude))
+                probe.SetRayLength(8f);
+        }
+
         void SpawnRacers()
         {
             const int gridColumns = 5;
@@ -238,7 +288,28 @@ namespace NeonLap.Core
                 waypoints[i] = waypointList[i];
 
             var playerPosition = GetGridSpawnPosition(playerGridIndex, gridColumns, columnSpacing, rowSpacing);
-            playerCar = BuildCar("HoverCar", vehicleProfile, true, PlayerBodyColor, PlayerAccentColor);
+            var trackIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+            if (GameRaceModeSettings.IsCareer)
+                PlayerGarageStore.EnsureLegalBuildForTrack(trackIndex);
+
+            var selectedBuild = PlayerGarageStore.GetSelectedBuild();
+            var playerProfile = selectedBuild != null && selectedBuild.profile != null
+                ? selectedBuild.profile
+                : PlayerVehicleProfileStore.GetSelectedProfile();
+            if (playerProfile == null)
+                playerProfile = vehicleProfile;
+            Color playerBody;
+            Color playerAccent;
+            if (selectedBuild != null)
+                VehicleCustomizationStore.GetResolvedColors(selectedBuild, out playerBody, out playerAccent);
+            else
+            {
+                playerBody = PlayerVehicleProfileStore.GetBodyColor(PlayerVehicleProfileStore.SelectedKind);
+                playerAccent = PlayerVehicleProfileStore.GetAccentColor(PlayerVehicleProfileStore.SelectedKind);
+            }
+
+            PlayerVehicleProfileStore.SyncFromGarageSelection(selectedBuild);
+            playerCar = SpawnCar("HoverCar", playerProfile, true, playerBody, playerAccent);
             if (playerCar == null)
             {
                 Debug.LogError("NeonLapSceneSetup: Failed to build player car.", this);
@@ -250,18 +321,40 @@ namespace NeonLap.Core
             if (playerReset != null)
                 playerReset.SetSpawnPoint(playerPosition, trackBuilder.StartRotation);
             playerCar.SetActive(true);
+            ApplyPlayerModeSettings(playerCar);
 
-            if (!spawnAiRivals)
+            if (GameRaceModeSettings.IsTeamRace)
+            {
+                var playerTeam = playerCar.GetComponent<RacerTeamMarker>();
+                if (playerTeam == null)
+                    playerTeam = playerCar.AddComponent<RacerTeamMarker>();
+                playerTeam.Configure(GameTeamRaceSettings.PlayerTeam);
+            }
+
+            var modeRules = GameRaceModeSettings.Rules;
+            var rivalCount = 0;
+            if (spawnAiRivals && modeRules.SpawnAiRivals)
+            {
+                rivalCount = Mathf.Min(
+                    modeRules.AiRivalCount > 0 ? modeRules.AiRivalCount : aiRivalCount,
+                    GameQualitySettings.Preset.AiRivalCount);
+            }
+            else if (spawnAiRivals && GameRaceModeSettings.IsTimeTrial)
+            {
+                TimeTrialSettings.Load();
+                rivalCount = Mathf.Min(TimeTrialSettings.RivalCount, GameQualitySettings.Preset.AiRivalCount);
+            }
+
+            if (rivalCount <= 0)
                 return;
-
-            var rivalCount = Mathf.Min(aiRivalCount, GameQualitySettings.Preset.AiRivalCount);
             for (var rivalIndex = 0; rivalIndex < rivalCount; rivalIndex++)
             {
                 var gridIndex = rivalIndex >= playerGridIndex ? rivalIndex + 1 : rivalIndex;
                 var spawnPosition = GetGridSpawnPosition(gridIndex, gridColumns, columnSpacing, rowSpacing);
-                var bodyColor = RivalBodyColors[rivalIndex % RivalBodyColors.Length];
-                var accentColor = RivalAccentColors[rivalIndex % RivalAccentColors.Length];
-                var aiCar = BuildCar("AIRival_" + (rivalIndex + 1), vehicleProfile, false, bodyColor, accentColor);
+                var rivalProfile = RivalIdentityCatalog.Get(rivalIndex);
+                var bodyColor = rivalProfile.BodyColor;
+                var accentColor = rivalProfile.AccentColor;
+                var aiCar = SpawnCar("AIRival_" + rivalProfile.ShortName, vehicleProfile, false, bodyColor, accentColor);
                 if (aiCar == null)
                     continue;
 
@@ -275,10 +368,35 @@ namespace NeonLap.Core
                 ai.ConfigureTrack(trackDefinition != null ? trackDefinition.trackWidth * 0.5f : 7f);
 
                 var difficulty = GameDifficultySettings.Preset;
+                var personality = AIPersonalityCatalog.GetForRivalIndex(rivalIndex);
                 ai.ApplyDifficulty(difficulty);
+                ai.ApplyPersonality(personality);
                 ai.SetRivalVariation(rivalIndex * 2,
                     difficulty.RivalSpeedBase + rivalIndex * difficulty.RivalSpeedStep);
                 ai.SetPlayerTarget(playerCar.transform);
+
+                var identity = aiCar.GetComponent<RivalIdentity>();
+                if (identity == null)
+                    identity = aiCar.AddComponent<RivalIdentity>();
+                identity.Configure(rivalIndex, rivalProfile);
+
+                var grudge = aiCar.GetComponent<RivalGrudgeController>();
+                if (grudge == null)
+                    grudge = aiCar.AddComponent<RivalGrudgeController>();
+                grudge.Configure(ai, playerCar.transform);
+
+                if (GameRaceModeSettings.IsTeamRace)
+                {
+                    var team = aiCar.GetComponent<RacerTeamMarker>();
+                    if (team == null)
+                        team = aiCar.AddComponent<RacerTeamMarker>();
+                    team.Configure(rivalIndex % 2 == 0 ? RaceTeam.Blue : RaceTeam.Red);
+                }
+
+                var combat = aiCar.GetComponent<AICombatController>();
+                if (combat == null)
+                    combat = aiCar.AddComponent<AICombatController>();
+                combat.Configure(playerCar.transform, rivalIndex, personality);
 
                 var aiReset = aiCar.GetComponent<VehicleReset>();
                 aiReset.SetSpawnPoint(spawnPosition, trackBuilder.StartRotation);
@@ -296,6 +414,27 @@ namespace NeonLap.Core
             var back = trackBuilder.StartRotation * Vector3.back;
             return trackBuilder.StartPosition + right * lateral + back * (row * rowSpacing);
         }
+
+        GameObject SpawnCar(string carName, VehicleProfile profile, bool isPlayer, Color bodyColor, Color accentColor)
+        {
+            var request = new NeonLapCarSpawnRequest
+            {
+                CarName = carName,
+                Profile = profile,
+                IsPlayer = isPlayer,
+                BodyColor = bodyColor,
+                AccentColor = accentColor,
+                BodyMaterial = carBodyMaterial,
+                AccentMaterial = carAccentMaterial,
+                InputActions = inputActions,
+                DamageMode = RaceModeDamageRules.GetDamageMode(),
+            };
+
+            return NeonLapCarSpawner.Spawn(in request, contentCatalog, BuildCar);
+        }
+
+        GameObject BuildCar(in NeonLapCarSpawnRequest request) =>
+            BuildCar(request.CarName, request.Profile, request.IsPlayer, request.BodyColor, request.AccentColor);
 
         GameObject BuildCar(string carName, VehicleProfile profile, bool isPlayer, Color bodyColor, Color accentColor)
         {
@@ -319,8 +458,9 @@ namespace NeonLap.Core
             rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
             ObstaclePhysics.ConfigureVehicle(rb);
 
-            var buildArgs = new HoverCarVisualBuilder.BuildArgs(carBodyMaterial, carAccentMaterial, bodyColor,
-                accentColor, isPlayer);
+            var buildArgs = isPlayer
+                ? VehicleCustomizationStore.CreateBuildArgs(carBodyMaterial, carAccentMaterial, bodyColor, accentColor, true)
+                : new HoverCarVisualBuilder.BuildArgs(carBodyMaterial, carAccentMaterial, bodyColor, accentColor, false);
             HoverCarVisualBuilder.Build(car.transform, buildArgs);
 
             var appearance = car.AddComponent<VehicleAppearance>();
@@ -331,7 +471,11 @@ namespace NeonLap.Core
             car.AddComponent<VehicleSlipEffect>();
             car.AddComponent<VehicleTaillightController>();
             car.AddComponent<VehicleDriftMarkEmitter>();
-            car.AddComponent<VehicleDamageSystem>();
+            var damageProfile = RaceModeDamageRules.GetDamageProfile();
+            var damageSystem = car.AddComponent<VehicleDamageSystem>();
+            damageSystem.Configure(damageProfile);
+            car.AddComponent<VehicleHealthSystem>();
+            car.AddComponent<RepairPadLapTracker>();
 
             VehicleCollisionBody.Build(car);
             foreach (var vehicleCollider in car.GetComponents<BoxCollider>())
@@ -346,6 +490,7 @@ namespace NeonLap.Core
             }
 
             car.AddComponent<VehicleGroundProbe>();
+            car.AddComponent<VehicleTrackZoneResponder>();
 
             PlayerInputReader inputReader = null;
             if (isPlayer)
@@ -360,10 +505,14 @@ namespace NeonLap.Core
             if (isPlayer)
             {
                 car.AddComponent<VehicleNitroBoost>();
+                car.AddComponent<VehicleCombatShield>();
+                car.AddComponent<PlayerCombatController>();
+                car.AddComponent<PlayerNitroController>();
                 var controller = car.AddComponent<VehicleController>();
                 controller.Configure(profile, inputReader);
                 var barrelRoll = car.AddComponent<VehicleBarrelRoll>();
                 barrelRoll.Configure(profile);
+                VehicleHapticsController.Setup(car);
             }
 
             var reset = car.AddComponent<VehicleReset>();
@@ -379,16 +528,22 @@ namespace NeonLap.Core
                 car.AddComponent<GtrExhaustPopVFX>();
                 car.AddComponent<VehicleUnderglowVFX>();
                 car.AddComponent<VehicleTurnSignalController>();
+                car.AddComponent<RaceShortcutTracker>();
                 car.AddComponent<RaceScoreSystem>();
-                car.AddComponent<VehicleAudioController>();
+                car.AddComponent<DriftZonePresence>();
+                VehicleAudioController.Setup(car);
+                car.AddComponent<VehicleCollisionAudio>();
                 car.AddComponent<VehicleFuelSystem>();
                 AddDriftTrails(car);
             }
             else
             {
+                car.AddComponent<VehicleNitroBoost>();
                 var ai = car.AddComponent<AIVehicleController>();
                 SetPrivateField(ai, "profile", profile);
-                car.AddComponent<AIVehicleHealthSystem>();
+                car.AddComponent<AICombatController>();
+                VehicleAudioController.Setup(car, spatial3D: true, useRivalMix: true);
+                car.AddComponent<VehicleCollisionAudio>();
                 reset.ConfigureForAi(ai);
             }
 
@@ -420,16 +575,31 @@ namespace NeonLap.Core
             return trail;
         }
 
+        static void EnsureAudioListener()
+        {
+            var cam = UnityEngine.Camera.main;
+            if (cam == null)
+                return;
+
+            if (cam.GetComponent<AudioListener>() == null)
+                cam.gameObject.AddComponent<AudioListener>();
+        }
+
         void SetupCamera()
         {
             var cam = UnityEngine.Camera.main;
             if (cam == null || playerCar == null)
                 return;
 
+            EnsureAudioListener();
+
             var follow = cam.gameObject.GetComponent<FollowCamera>();
             if (follow == null)
                 follow = cam.gameObject.AddComponent<FollowCamera>();
             follow.Target = playerCar.transform;
+            if (cam.gameObject.GetComponent<DriftCameraShake>() == null)
+                cam.gameObject.AddComponent<DriftCameraShake>();
+            VFX.SpeedLinesPostEffect.Ensure(cam, playerCar.transform);
 
             var weather = FindAnyObjectByType<DynamicWeatherSystem>();
             if (weather != null)
@@ -448,33 +618,83 @@ namespace NeonLap.Core
 
             var visual = HelicopterVisualBuilder.Build(helicopterGo.transform, carBodyMaterial, carAccentMaterial);
             var patrol = helicopterGo.AddComponent<PatrolHelicopter>();
-            patrol.Configure(playerCar.transform, visual, raceManager);
+            patrol.Configure(playerCar.transform, visual, raceManager, policeChase);
+        }
+
+        void ApplyPlayerModeSettings(GameObject player)
+        {
+            if (player == null)
+                return;
+
+            var rules = GameRaceModeSettings.Rules;
+            var fuel = player.GetComponent<VehicleFuelSystem>();
+            if (fuel != null)
+            {
+                fuel.Configure(GameFuelEconomy.GetTankDuration(GameLapSettings.CurrentLaps), null);
+                fuel.SetInfinite(rules.InfiniteFuel);
+            }
         }
 
         void SetupRaceSystems()
         {
+            var rules = GameRaceModeSettings.Rules;
             var raceRoot = trackBuilder.transform;
             raceManager = raceRoot.gameObject.AddComponent<RaceManager>();
+            if (rules.SpawnAiRivals)
+                RivalBlockerCoordinator.Ensure(raceManager);
             SetPrivateField(raceManager, "totalLaps", GameLapSettings.CurrentLaps);
             SetPrivateField(raceManager, "trackBuilder", trackBuilder);
             SetPrivateField(raceManager, "playerReset", playerCar.GetComponent<VehicleReset>());
+            raceManager.SetPlayerLapFinishEnabled(rules.UseLapFinish);
 
             if (raceRoot.GetComponent<DriftMarkSystem>() == null)
                 raceRoot.gameObject.AddComponent<DriftMarkSystem>();
 
-            var policeChase = raceRoot.gameObject.AddComponent<PoliceChaseSystem>();
-            policeChase.Configure(raceManager, playerCar, trackBuilder, vehicleProfile, carBodyMaterial,
-                carAccentMaterial);
+            policeChase = null;
+            TimeTrialSettings.Load();
+            var allowPolice = rules.AllowPolice || rules.ForcePolice
+                || ((GameRaceModeSettings.IsTimeTrial || GameRaceModeSettings.IsGhostDuel)
+                    && TimeTrialSettings.PoliceEnabled);
+            if (allowPolice)
+            {
+                policeChase = raceRoot.gameObject.AddComponent<PoliceChaseSystem>();
+                policeChase.Configure(raceManager, playerCar, trackBuilder, vehicleProfile, carBodyMaterial,
+                    carAccentMaterial);
+                if (rules.ForcePolice)
+                    policeChase.SetOutrunMode(true);
+                PoliceChaseAudio.Setup(raceRoot, raceManager, policeChase);
+            }
+
+            DynamicRaceMusicController.Setup(raceRoot, raceManager, policeChase);
+            BlackoutLapController.Setup(raceRoot, raceManager, trackEdgeMaterial);
+            RaceAudioController.Setup(raceRoot, raceManager);
+            RaceSessionReporter.Setup(raceManager, playerCar);
+            RaceAchievementBridge.Setup(raceManager, playerCar);
+            RaceMetagameBridge.Setup(raceManager, playerCar);
+            RaceNegativeAchievementBridge.Setup(raceManager, playerCar);
+            RaceLeaderboardBridge.Setup(raceManager, playerCar);
+            FindAnyObjectByType<DynamicWeatherSystem>()?.BindRace(raceManager);
+
+            var aiWaypoints = trackBuilder.AiWaypointTransforms;
+            if (aiWaypoints.Count > 0 && aiWaypoints[0] != null)
+                CatchUpGhostController.Setup(aiWaypoints[0].parent, raceManager);
+
+            var trackLevelIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+            playerCar.GetComponent<RaceShortcutTracker>()?.Configure(trackLevelIndex);
+            EnsureAudioListener();
+            NeonLap.VFX.VehicleHornSfx.Setup(playerCar);
 
             if (!createUi)
             {
-                environmentBuilder?.ConfigureScoreboard(raceManager);
+                playerCar.GetComponent<PlayerCombatController>()
+                    ?.Configure(playerCar.GetComponent<PlayerInputReader>(), raceManager);
+                environmentBuilder?.ConfigureScoreboard(raceManager, policeChase);
                 return;
             }
 
             BuildRaceUi();
             BuildPauseMenu(raceRoot.gameObject);
-            environmentBuilder?.ConfigureScoreboard(raceManager);
+            environmentBuilder?.ConfigureScoreboard(raceManager, policeChase);
         }
 
         void BuildPauseMenu(GameObject raceRoot)
@@ -498,12 +718,55 @@ namespace NeonLap.Core
             panelImage.color = new Color(0f, 0f, 0f, 0.65f);
             pausePanel.SetActive(false);
 
-            var resume = CreateMenuButton(pausePanel.transform, "ResumeButton", "RESUME", new Vector2(0f, 40f));
-            var restart = CreateMenuButton(pausePanel.transform, "RestartButton", "RESTART", new Vector2(0f, -30f));
-            var quit = CreateMenuButton(pausePanel.transform, "QuitButton", "MAIN MENU", new Vector2(0f, -100f));
+            var pauseTitle = CreateCenteredText(pausePanel.transform, "PauseTitle", "PAUSED", 52);
+            pauseTitle.color = new Color(0.45f, 1f, 1f);
+            pauseTitle.fontStyle = FontStyle.Bold;
+            var pauseTitleRect = pauseTitle.GetComponent<RectTransform>();
+            pauseTitleRect.anchorMin = new Vector2(0.5f, 0.5f);
+            pauseTitleRect.anchorMax = new Vector2(0.5f, 0.5f);
+            pauseTitleRect.sizeDelta = new Vector2(520f, 64f);
+            pauseTitleRect.anchoredPosition = new Vector2(0f, 150f);
+
+            var pauseStatus = CreateCenteredText(pausePanel.transform, "PauseStatus", string.Empty, 22);
+            pauseStatus.alignment = TextAnchor.MiddleCenter;
+            pauseStatus.color = new Color(0.8f, 0.9f, 1f);
+            var pauseStatusRect = pauseStatus.GetComponent<RectTransform>();
+            pauseStatusRect.anchorMin = new Vector2(0.5f, 0.5f);
+            pauseStatusRect.anchorMax = new Vector2(0.5f, 0.5f);
+            pauseStatusRect.sizeDelta = new Vector2(720f, 72f);
+            pauseStatusRect.anchoredPosition = new Vector2(0f, 95f);
+
+            var resume = CreateMenuButton(pausePanel.transform, "ResumeButton", "RESUME", new Vector2(0f, 70f));
+            var restart = CreateMenuButton(pausePanel.transform, "RestartButton", "RESTART", new Vector2(0f, 10f));
+            var controls = CreateMenuButton(pausePanel.transform, "ControlsButton", "CONTROLS", new Vector2(0f, -50f));
+            var quit = CreateMenuButton(pausePanel.transform, "QuitButton", "MAIN MENU", new Vector2(0f, -110f));
+
+            var controlsPanel = ControlsOverlayBuilder.Build(canvasGo.transform, "PauseControlsPanel",
+                out var controlsBack, "BACK TO PAUSE");
 
             var pause = canvasGo.AddComponent<PauseMenuController>();
-            pause.Configure(pausePanel, raceManager, resume, restart, quit);
+            pause.Configure(pausePanel, raceManager, resume, restart, controls, quit, controlsPanel, controlsBack,
+                pauseStatus);
+
+            var modeRules = GameRaceModeSettings.Rules;
+            if (modeRules.UseTimeTrialGhost || modeRules.UseGhostDuel)
+            {
+                var trackIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+                var ghostExport = CreateMenuButton(pausePanel.transform, "GhostExportButton", "EXPORT GHOST",
+                    new Vector2(0f, -170f));
+                var ghostImport = CreateMenuButton(pausePanel.transform, "GhostImportButton", "IMPORT GHOST",
+                    new Vector2(0f, -230f));
+                var ghostShareStatus = CreateCenteredText(pausePanel.transform, "GhostShareStatus",
+                    "Share PB ghosts via clipboard", 18);
+                ghostShareStatus.alignment = TextAnchor.MiddleCenter;
+                ghostShareStatus.color = new Color(0.75f, 0.88f, 1f);
+                var shareStatusRect = ghostShareStatus.GetComponent<RectTransform>();
+                shareStatusRect.anchorMin = new Vector2(0.5f, 0.5f);
+                shareStatusRect.anchorMax = new Vector2(0.5f, 0.5f);
+                shareStatusRect.sizeDelta = new Vector2(520f, 48f);
+                shareStatusRect.anchoredPosition = new Vector2(0f, -290f);
+                GhostShareController.Setup(pausePanel.transform, trackIndex, ghostExport, ghostImport, ghostShareStatus);
+            }
         }
 
         Button CreateMenuButton(Transform parent, string name, string label, Vector2 pos)
@@ -545,6 +808,43 @@ namespace NeonLap.Core
 
             var lapText = CreateText(canvasGo.transform, "LapText", new Vector2(20f, -20f), TextAnchor.UpperLeft, 28);
             var lapTimer = CreateText(canvasGo.transform, "LapTimer", new Vector2(-20f, -20f), TextAnchor.UpperRight, 28);
+            Text pbLapHeader = null;
+            Text pbLapTimer = null;
+            if (GameRaceModeSettings.IsTimeTrial)
+            {
+                pbLapHeader = CreateText(canvasGo.transform, "PbLapHeader", new Vector2(-250f, -12f), TextAnchor.UpperRight, 20);
+                pbLapHeader.alignment = TextAnchor.UpperRight;
+                pbLapHeader.color = new Color(0.65f, 0.85f, 1f, 0.9f);
+                pbLapHeader.text = "PB LAP";
+                var pbHeaderRect = pbLapHeader.GetComponent<RectTransform>();
+                pbHeaderRect.sizeDelta = new Vector2(160f, 24f);
+
+                pbLapTimer = CreateText(canvasGo.transform, "PbLapTimer", new Vector2(-250f, -38f), TextAnchor.UpperRight, 40);
+                pbLapTimer.alignment = TextAnchor.UpperRight;
+                pbLapTimer.fontStyle = FontStyle.Bold;
+                pbLapTimer.color = new Color(0.55f, 0.95f, 1f);
+                pbLapTimer.text = "--:--.--";
+                var pbTimerRect = pbLapTimer.GetComponent<RectTransform>();
+                pbTimerRect.sizeDelta = new Vector2(220f, 48f);
+
+                var lapTimerRect = lapTimer.GetComponent<RectTransform>();
+                lapTimerRect.anchoredPosition = new Vector2(-20f, -72f);
+            }
+
+            var sectorSplit = CreateText(canvasGo.transform, "SectorSplit", new Vector2(-20f, -52f), TextAnchor.UpperRight, 22);
+            if (GameRaceModeSettings.IsTimeTrial)
+            {
+                var sectorRect = sectorSplit.GetComponent<RectTransform>();
+                sectorRect.anchoredPosition = new Vector2(-20f, -104f);
+            }
+            sectorSplit.color = new Color(0.75f, 0.88f, 1f);
+            var ghostDelta = CreateText(canvasGo.transform, "GhostDelta", new Vector2(0f, -24f), TextAnchor.UpperCenter, 30);
+            ghostDelta.alignment = TextAnchor.UpperCenter;
+            ghostDelta.color = new Color(0.55f, 0.95f, 1f);
+            ghostDelta.fontStyle = FontStyle.Bold;
+            var ghostDeltaRect = ghostDelta.GetComponent<RectTransform>();
+            ghostDeltaRect.sizeDelta = new Vector2(320f, 40f);
+            ghostDelta.gameObject.SetActive(false);
             var raceTimer = CreateText(canvasGo.transform, "RaceTimer", new Vector2(-20f, -60f), TextAnchor.UpperRight, 24);
             var bestLap = CreateText(canvasGo.transform, "BestLap", new Vector2(20f, -60f), TextAnchor.UpperLeft, 24);
             var positionText = CreateText(canvasGo.transform, "PositionText", new Vector2(20f, -100f), TextAnchor.UpperLeft, 28);
@@ -558,13 +858,21 @@ namespace NeonLap.Core
 
             var dashboardCluster = canvasGo.AddComponent<VehicleDashboardCluster>();
             dashboardCluster.Build(canvasGo.transform);
-            dashboardCluster.Configure(raceManager, playerCar.GetComponent<VehicleController>());
+            var playerControllerForHud = playerCar.GetComponent<VehicleController>();
+            dashboardCluster.Configure(raceManager, playerControllerForHud);
+            dashboardCluster.ApplyProfileSkin(playerControllerForHud != null ? playerControllerForHud.Profile : null);
 
             var commentaryPanel = CreateCommentaryPanel(canvasGo.transform, out var commentarySubtitle);
 
             var directionGuide = canvasGo.AddComponent<RaceDirectionGuide>();
-            directionGuide.Configure(raceManager, playerCar.transform, trackBuilder.CheckpointTransforms,
-                canvasGo.transform);
+            var trackHalfWidth = trackDefinition != null ? trackDefinition.trackWidth * 0.5f : 7f;
+            directionGuide.Configure(
+                raceManager,
+                playerCar.transform,
+                trackBuilder.CheckpointTransforms,
+                canvasGo.transform,
+                trackBuilder.CenterlinePoints,
+                trackHalfWidth);
 
             var collisionHud = canvasGo.AddComponent<CollisionWarningHud>();
             collisionHud.Build(canvasGo.transform);
@@ -604,39 +912,87 @@ namespace NeonLap.Core
             finishPanelRect.anchorMin = new Vector2(0f, 0f);
             finishPanelRect.anchorMax = new Vector2(1f, 0f);
             finishPanelRect.pivot = new Vector2(0.5f, 0f);
-            finishPanelRect.sizeDelta = new Vector2(0f, 340f);
+            finishPanelRect.sizeDelta = new Vector2(0f, 520f);
             finishPanelRect.anchoredPosition = Vector2.zero;
             finishPanel.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.82f);
             finishPanel.SetActive(false);
 
             var jumpHint = CreatePodiumJumpHint(canvasGo.transform);
 
-            var finishTitle = CreateText(finishPanel.transform, "FinishTitle", new Vector2(0f, 250f), TextAnchor.LowerCenter, 64);
+            var finishTitle = CreateText(finishPanel.transform, "FinishTitle", new Vector2(0f, 430f), TextAnchor.LowerCenter, 64);
             finishTitle.alignment = TextAnchor.LowerCenter;
             finishTitle.color = new Color(0.4f, 1f, 1f);
             var finishTitleRect = finishTitle.GetComponent<RectTransform>();
             finishTitleRect.anchorMin = new Vector2(0.5f, 0f);
             finishTitleRect.anchorMax = new Vector2(0.5f, 0f);
             finishTitleRect.pivot = new Vector2(0.5f, 0f);
-            finishTitleRect.anchoredPosition = new Vector2(0f, 250f);
+            finishTitleRect.anchoredPosition = new Vector2(0f, 430f);
             finishTitleRect.sizeDelta = new Vector2(900f, 80f);
 
-            var finishDetail = CreateText(finishPanel.transform, "FinishDetail", new Vector2(0f, 205f), TextAnchor.LowerCenter, 28);
+            var finishStarOne = CreateText(finishPanel.transform, "FinishStar1", new Vector2(-72f, 360f), TextAnchor.LowerCenter, 56);
+            finishStarOne.text = "☆";
+            finishStarOne.color = new Color(0.28f, 0.32f, 0.42f);
+            var finishStarOneRect = finishStarOne.GetComponent<RectTransform>();
+            finishStarOneRect.sizeDelta = new Vector2(72f, 72f);
+
+            var finishStarTwo = CreateText(finishPanel.transform, "FinishStar2", new Vector2(0f, 360f), TextAnchor.LowerCenter, 56);
+            finishStarTwo.text = "☆";
+            finishStarTwo.color = new Color(0.28f, 0.32f, 0.42f);
+            var finishStarTwoRect = finishStarTwo.GetComponent<RectTransform>();
+            finishStarTwoRect.sizeDelta = new Vector2(72f, 72f);
+
+            var finishStarThree = CreateText(finishPanel.transform, "FinishStar3", new Vector2(72f, 360f), TextAnchor.LowerCenter, 56);
+            finishStarThree.text = "☆";
+            finishStarThree.color = new Color(0.28f, 0.32f, 0.42f);
+            var finishStarThreeRect = finishStarThree.GetComponent<RectTransform>();
+            finishStarThreeRect.sizeDelta = new Vector2(72f, 72f);
+
+            var finishRewardsLine = CreateText(finishPanel.transform, "FinishRewardsLine", new Vector2(0f, 312f), TextAnchor.LowerCenter, 24);
+            finishRewardsLine.alignment = TextAnchor.LowerCenter;
+            finishRewardsLine.color = new Color(1f, 0.92f, 0.35f);
+            var finishRewardsRect = finishRewardsLine.GetComponent<RectTransform>();
+            finishRewardsRect.sizeDelta = new Vector2(960f, 36f);
+
+            var finishPlacementLine = CreateText(finishPanel.transform, "FinishPlacementLine", new Vector2(0f, 282f), TextAnchor.LowerCenter, 22);
+            finishPlacementLine.alignment = TextAnchor.LowerCenter;
+            finishPlacementLine.color = new Color(0.75f, 0.95f, 1f);
+            var finishPlacementRect = finishPlacementLine.GetComponent<RectTransform>();
+            finishPlacementRect.sizeDelta = new Vector2(960f, 32f);
+
+            var finishScreenView = finishPanel.AddComponent<RaceFinishScreenView>();
+            finishScreenView.Configure(finishStarOne, finishStarTwo, finishStarThree, finishRewardsLine, finishPlacementLine);
+
+            var finishDetail = CreateText(finishPanel.transform, "FinishDetail", new Vector2(0f, 248f), TextAnchor.LowerCenter, 22);
             finishDetail.alignment = TextAnchor.LowerCenter;
             finishDetail.color = Color.white;
             var finishDetailRect = finishDetail.GetComponent<RectTransform>();
             finishDetailRect.anchorMin = new Vector2(0.5f, 0f);
             finishDetailRect.anchorMax = new Vector2(0.5f, 0f);
             finishDetailRect.pivot = new Vector2(0.5f, 0f);
-            finishDetailRect.anchoredPosition = new Vector2(0f, 205f);
-            finishDetailRect.sizeDelta = new Vector2(900f, 50f);
+            finishDetailRect.anchoredPosition = new Vector2(0f, 248f);
+            finishDetailRect.sizeDelta = new Vector2(960f, 64f);
 
-            var nextLevelButton = CreateMenuButton(finishPanel.transform, "NextLevelButton", "NEXT LEVEL", new Vector2(0f, 130f));
+            var finishBreakdown = CreateText(finishPanel.transform, "FinishBreakdown", new Vector2(0f, 188f), TextAnchor.LowerCenter, 20);
+            finishBreakdown.alignment = TextAnchor.LowerCenter;
+            finishBreakdown.color = new Color(0.55f, 0.95f, 1f);
+            var finishBreakdownRect = finishBreakdown.GetComponent<RectTransform>();
+            finishBreakdownRect.anchorMin = new Vector2(0.5f, 0f);
+            finishBreakdownRect.anchorMax = new Vector2(0.5f, 0f);
+            finishBreakdownRect.pivot = new Vector2(0.5f, 0f);
+            finishBreakdownRect.anchoredPosition = new Vector2(0f, 188f);
+            finishBreakdownRect.sizeDelta = new Vector2(720f, 100f);
+            finishBreakdown.gameObject.SetActive(false);
+
+            var nextLevelButton = CreateMenuButton(finishPanel.transform, "NextLevelButton", "NEXT TRACK", new Vector2(0f, 120f));
             nextLevelButton.gameObject.SetActive(false);
             var nextLevelLabel = nextLevelButton.GetComponentInChildren<Text>();
 
-            var finishRestart = CreateMenuButton(finishPanel.transform, "FinishRestartButton", "RESTART", new Vector2(0f, 70f));
-            var finishMenu = CreateMenuButton(finishPanel.transform, "FinishMenuButton", "MAIN MENU", new Vector2(0f, 10f));
+            var finishRestart = CreateMenuButton(finishPanel.transform, "FinishRestartButton", "RETRY", new Vector2(0f, 60f));
+            var finishRestartLabel = finishRestart.GetComponentInChildren<Text>();
+            var itchExportButton = CreateMenuButton(finishPanel.transform, "ItchExportButton", "COPY PB FOR ITCH",
+                new Vector2(0f, 60f));
+            itchExportButton.gameObject.SetActive(false);
+            var finishMenu = CreateMenuButton(finishPanel.transform, "FinishMenuButton", "MAIN MENU", new Vector2(0f, 30f));
 
             var finishMenuController = canvasGo.AddComponent<FinishMenuController>();
             finishMenuController.Configure(
@@ -645,13 +1001,28 @@ namespace NeonLap.Core
                 finishMenu,
                 finishRestart,
                 nextLevelButton,
-                nextLevelLabel);
+                nextLevelLabel,
+                finishRestartLabel);
+            finishMenuController.ConfigureItchExportButton(itchExportButton);
+
+            var ghostToggle = CreateMenuButton(canvasGo.transform, "GhostToggleButton", "GHOST ON", new Vector2(-20f, -100f));
+            var ghostToggleRect = ghostToggle.GetComponent<RectTransform>();
+            ghostToggleRect.anchorMin = new Vector2(1f, 1f);
+            ghostToggleRect.anchorMax = new Vector2(1f, 1f);
+            ghostToggleRect.pivot = new Vector2(1f, 1f);
+            ghostToggleRect.anchoredPosition = new Vector2(-20f, -100f);
+            ghostToggleRect.sizeDelta = new Vector2(180f, 42f);
+            var ghostToggleLabel = ghostToggle.GetComponentInChildren<Text>();
+            ghostToggle.gameObject.SetActive(false);
 
             raceUi.Configure(
                 raceManager,
                 playerCar.GetComponent<VehicleController>(),
                 lapText,
                 lapTimer,
+                pbLapHeader,
+                pbLapTimer,
+                sectorSplit,
                 raceTimer,
                 bestLap,
                 positionText,
@@ -663,10 +1034,35 @@ namespace NeonLap.Core
                 countdownPanel,
                 finishPanel,
                 finishTitle,
-                finishDetail);
+                finishDetail,
+                finishBreakdown,
+                finishScreenView);
 
+            var voiceover = CommentaryVoiceover.Setup(raceManager.transform);
             var commentary = canvasGo.AddComponent<RaceCommentarySystem>();
-            commentary.Configure(raceManager, commentarySubtitle, commentaryPanel);
+            commentary.Configure(raceManager, commentarySubtitle, commentaryPanel, voiceover);
+            StadiumCrowdAudio.Setup(raceManager.transform, commentary);
+
+            var touchUi = TouchDrivingUI.Build(canvasGo.transform);
+            var playerInput = playerCar.GetComponent<PlayerInputReader>();
+            var compositeInput = CompositeVehicleInputProvider.Setup(playerCar, playerInput, touchUi);
+            var playerController = playerCar.GetComponent<VehicleController>();
+            var activeProfile = playerController != null && playerController.Profile != null
+                ? playerController.Profile
+                : vehicleProfile;
+            playerController.Configure(activeProfile, compositeInput);
+            playerCar.GetComponent<PlayerCombatController>()?.Configure(playerInput, raceManager);
+
+            var photoHint = CreateText(canvasGo.transform, "PhotoModeHint", new Vector2(0f, 120f), TextAnchor.LowerCenter, 20);
+            photoHint.alignment = TextAnchor.LowerCenter;
+            photoHint.color = new Color(0.75f, 0.88f, 1f, 0.95f);
+            var photoHintRect = photoHint.GetComponent<RectTransform>();
+            photoHintRect.anchorMin = new Vector2(0.5f, 0f);
+            photoHintRect.anchorMax = new Vector2(0.5f, 0f);
+            photoHintRect.pivot = new Vector2(0.5f, 0f);
+            photoHintRect.anchoredPosition = new Vector2(0f, 120f);
+            photoHintRect.sizeDelta = new Vector2(900f, 48f);
+            photoHint.gameObject.SetActive(false);
 
             var followCamera = UnityEngine.Camera.main != null
                 ? UnityEngine.Camera.main.GetComponent<FollowCamera>()
@@ -693,10 +1089,24 @@ namespace NeonLap.Core
             var replaySystem = raceManager.gameObject.AddComponent<RaceReplaySystem>();
             replaySystem.Configure(raceManager, followCamera, playerCar, canvasGo.transform);
 
+            var mainCam = followCamera != null ? followCamera.GetComponent<UnityEngine.Camera>() : UnityEngine.Camera.main;
+            Camera.CameraSpectacleDirector.Setup(mainCam, followCamera, playerCar.transform, policeChase, raceManager);
+
+            if (followCamera != null)
+            {
+                var photoMode = canvasGo.AddComponent<PhotoModeController>();
+                photoMode.Configure(followCamera, raceManager, playerCar, photoHint, photoHint.gameObject, canvasGo);
+            }
+
             var minimapPanel = CreateMinimapPanel(canvasGo.transform, new Vector2(20f, 96f));
             var minimap = minimapPanel.AddComponent<RaceMinimap>();
-            minimap.Configure(raceManager, trackBuilder.CenterlinePoints);
+            minimap.Configure(
+                raceManager,
+                trackBuilder.CenterlinePoints,
+                trackBuilder.ShortcutPaths,
+                policeChase);
             minimapPanel.transform.SetAsLastSibling();
+            RivalStandingsHud.Setup(canvasGo.transform, raceManager);
 
             var podiumSequence = raceManager.gameObject.AddComponent<RacePodiumSequence>();
             podiumSequence.Configure(
@@ -708,6 +1118,68 @@ namespace NeonLap.Core
                 finishPanel,
                 jumpHint,
                 replaySystem);
+
+            var modeRules = GameRaceModeSettings.Rules;
+
+            var trackIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+            var showGhostHud = modeRules.UseTimeTrialGhost || modeRules.UseGhostDuel;
+            if (showGhostHud)
+            {
+                ghostDelta.gameObject.SetActive(true);
+                ghostToggle.gameObject.SetActive(true);
+            }
+
+            var ghostHud = GhostHudController.Setup(
+                raceManager,
+                playerCar.transform,
+                ghostDelta,
+                ghostToggle,
+                ghostToggleLabel);
+
+            dashboardCluster.Configure(
+                raceManager,
+                playerControllerForHud,
+                ghostHud,
+                scoreSystem);
+            dashboardCluster.ApplyProfileSkin(playerControllerForHud != null ? playerControllerForHud.Profile : null);
+            collisionHud.Configure(proximitySensor, ghostHud, playerCar.transform);
+            directionGuide.BindGhostHud(ghostHud);
+            minimap.BindGhostHud(ghostHud);
+
+            TimeTrialController.Setup(
+                raceManager,
+                replaySystem,
+                raceUi,
+                podiumSequence,
+                trackBuilder,
+                playerCar,
+                carBodyMaterial,
+                carAccentMaterial,
+                ghostHud);
+
+            GhostDuelController.Setup(
+                raceManager,
+                replaySystem,
+                raceUi,
+                trackBuilder,
+                playerCar,
+                carBodyMaterial,
+                carAccentMaterial,
+                ghostHud);
+
+            if (!modeRules.UsePodiumSequence && podiumSequence != null)
+                podiumSequence.enabled = false;
+
+            EliminationModeController.Setup(raceManager, raceUi, podiumSequence);
+            DemolitionModeController.Setup(raceManager, raceUi);
+            ChaseModeController.Setup(raceManager, raceUi, podiumSequence, playerCar, policeChase);
+
+            if (jumpHint != null)
+                jumpHint.text = GameRaceModeSettings.IsStuntFreestyle
+                    ? "SPACE / DRIFT — CELEBRATE   •   P — PHOTO MODE   •   ENTER — END SESSION"
+                    : "SPACE / DRIFT — CELEBRATE   •   P — PHOTO MODE   •   ENTER — CONTINUE";
+            ScoreAttackModeController.Setup(raceManager, raceUi, scoreSystem, podiumSequence);
+            StuntFreestyleController.Setup(raceManager, raceUi, playerCar);
         }
 
         static void ConfigureScreenTextRect(RectTransform rect, float height, Vector2 anchoredPosition)

@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using NeonLap.Camera;
+using NeonLap.Core;
 using NeonLap.Race;
 using NeonLap.Vehicle;
 using UnityEngine;
@@ -16,6 +17,11 @@ namespace NeonLap.Race
             public float Time;
             public Vector3 Position;
             public Quaternion Rotation;
+
+            public ReplayFrameSnapshot ToSnapshot()
+            {
+                return ReplayFrameSnapshot.FromTransform(Time, Position, Rotation);
+            }
         }
 
         sealed class RacerTrack
@@ -32,11 +38,19 @@ namespace NeonLap.Race
             Side,
             LowHero,
             Wide,
-            FinishDrama
+            FinishDrama,
+            OvertakeDrama
+        }
+
+        struct OvertakeCandidate
+        {
+            public float Time;
+            public float Score;
         }
 
         [SerializeField] float recordInterval = 0.1f;
         [SerializeField] float highlightDuration = 18f;
+        [SerializeField] float overtakeWindowHalf = 2.75f;
         [SerializeField] float shotDuration = 4.2f;
         [SerializeField] float cameraSmooth = 6f;
         [SerializeField] float playbackSpeed = 1f;
@@ -52,10 +66,89 @@ namespace NeonLap.Race
         readonly List<RacerTrack> tracks = new();
         float recordAccumulator;
         float recordedDuration;
+        float lastPlaybackStartTime;
+        float lastPlaybackEndTime;
+        float saveGhostFeedbackEndTime;
         bool recording;
         bool subscribed;
 
         public bool HasRecording => tracks.Count > 0 && recordedDuration > 0.5f;
+
+        public float LastPlaybackStartTime => lastPlaybackStartTime;
+
+        public float LastPlaybackEndTime => lastPlaybackEndTime;
+
+        public List<ReplayFrameSnapshot> ExportPlayerFrames(float startTime, float endTime)
+        {
+            var result = new List<ReplayFrameSnapshot>();
+            var player = tracks.Find(track => track.IsPlayer);
+            if (player == null || player.Frames.Count == 0)
+                return result;
+
+            var minTime = Mathf.Max(0f, startTime);
+            var maxTime = endTime > 0f ? endTime : recordedDuration;
+
+            foreach (var frame in player.Frames)
+            {
+                if (frame.Time < minTime)
+                    continue;
+
+                if (frame.Time > maxTime)
+                    break;
+
+                result.Add(frame.ToSnapshot());
+            }
+
+            if (result.Count > 0)
+            {
+                var offset = result[0].Time;
+                for (var i = 0; i < result.Count; i++)
+                {
+                    var frame = result[i];
+                    frame.Time -= offset;
+                    result[i] = frame;
+                }
+            }
+
+            return result;
+        }
+
+        public GhostRecordingData ExportPlaybackHighlightGhost(float startTime, float endTime, float anchorRaceTime = 0f)
+        {
+            return GhostReplayBridge.BuildRecording(ExportPlayerFrames(startTime, endTime), anchorRaceTime);
+        }
+
+        public GhostRecordingData ExportLastPlaybackHighlightGhost()
+        {
+            return ExportPlaybackHighlightGhost(lastPlaybackStartTime, lastPlaybackEndTime);
+        }
+
+        public bool TrySaveLastPlaybackAsLapGhost(out string message)
+        {
+            message = string.Empty;
+            if (!GhostReplayBridge.CanSaveToPbStore)
+            {
+                message = "GHOST SAVE — TIME TRIAL / GHOST DUEL ONLY";
+                return false;
+            }
+
+            var recording = ExportLastPlaybackHighlightGhost();
+            if (recording == null || !recording.IsValid)
+            {
+                message = "GHOST SAVE FAILED";
+                return false;
+            }
+
+            var trackIndex = GameManager.Instance != null ? GameManager.Instance.CurrentLevelIndex : 0;
+            if (!GhostReplayBridge.SaveHighlightAsLapGhost(trackIndex, recording))
+            {
+                message = "GHOST SAVE FAILED";
+                return false;
+            }
+
+            message = $"GHOST SAVED — LAP {TimeTrialRecordStore.FormatTime(recording.Duration)}";
+            return true;
+        }
 
         public void Configure(RaceManager manager, FollowCamera camera, GameObject playerCar, Transform uiRoot)
         {
@@ -168,10 +261,66 @@ namespace NeonLap.Race
             }
         }
 
+        public bool TryFindBestOvertake(out float centerTime)
+        {
+            centerTime = 0f;
+            var player = tracks.Find(track => track.IsPlayer);
+            if (player == null || player.Frames.Count < 4)
+                return false;
+
+            OvertakeCandidate? best = null;
+            foreach (var rival in tracks)
+            {
+                if (rival.IsPlayer || rival.Frames.Count < 4)
+                    continue;
+
+                DetectOvertakes(player, rival, ref best);
+            }
+
+            if (!best.HasValue)
+                return false;
+
+            centerTime = best.Value.Time;
+            return true;
+        }
+
+        public IEnumerator PlayBestOvertakeReplay()
+        {
+            if (!HasRecording || playerTransform == null || replayCamera == null)
+                yield break;
+
+            if (!TryFindBestOvertake(out var centerTime))
+            {
+                yield return PlayHighlightReplay();
+                yield break;
+            }
+
+            var startTime = Mathf.Max(0f, centerTime - overtakeWindowHalf);
+            var endTime = Mathf.Min(recordedDuration, centerTime + overtakeWindowHalf);
+            if (endTime - startTime < 1.5f)
+            {
+                yield return PlayHighlightReplay();
+                yield break;
+            }
+
+            yield return PlayReplayWindow(startTime, endTime, "OVERTAKE", true);
+        }
+
         public IEnumerator PlayHighlightReplay()
         {
             if (!HasRecording || playerTransform == null || replayCamera == null)
                 yield break;
+
+            var endTime = recordedDuration;
+            var startTime = Mathf.Max(0f, endTime - highlightDuration);
+            yield return PlayReplayWindow(startTime, endTime, "RACE REPLAY", false);
+        }
+
+        IEnumerator PlayReplayWindow(float startTime, float endTime, string title, bool overtakeFocus)
+        {
+            lastPlaybackStartTime = startTime;
+            lastPlaybackEndTime = endTime;
+            saveGhostFeedbackEndTime = 0f;
 
             PrepareRacersForPlayback();
             FreezeDriving();
@@ -179,27 +328,43 @@ namespace NeonLap.Race
             if (followCamera != null)
                 followCamera.enabled = false;
 
+            Camera.CameraSpectacleDirector.Instance?.SetReplayActive(true);
+
+            if (replayTitleText != null)
+                replayTitleText.text = title;
+
             ShowOverlay();
 
-            var endTime = recordedDuration;
-            var startTime = Mathf.Max(0f, endTime - highlightDuration);
             var duration = endTime - startTime;
             var playbackTime = startTime;
-            var previousShot = GetShotForPlaybackTime(0f, duration);
+            var previousShot = overtakeFocus
+                ? ReplayCameraShot.OvertakeDrama
+                : GetShotForPlaybackTime(0f, duration);
 
             ApplyTracksAtTime(startTime);
+
+            UpdateReplayHint();
 
             while (playbackTime < endTime)
             {
                 if (WasSkipPressed())
                     break;
 
+                if (WasSaveGhostPressed() && TrySaveLastPlaybackAsLapGhost(out var saveMessage))
+                {
+                    saveGhostFeedbackEndTime = Time.time + 2.5f;
+                    if (replayHintText != null)
+                        replayHintText.text = saveMessage;
+                }
+
                 playbackTime += Time.deltaTime * playbackSpeed;
                 var clampedTime = Mathf.Min(playbackTime, endTime);
                 ApplyTracksAtTime(clampedTime);
 
                 var shotTime = clampedTime - startTime;
-                var shot = GetShotForPlaybackTime(shotTime, duration);
+                var shot = overtakeFocus
+                    ? ReplayCameraShot.OvertakeDrama
+                    : GetShotForPlaybackTime(shotTime, duration);
                 UpdateCinematicCamera(shot, previousShot, shotTime, duration);
                 previousShot = shot;
 
@@ -208,12 +373,78 @@ namespace NeonLap.Race
 
             ApplyTracksAtTime(endTime);
             HideOverlay();
+            Camera.CameraSpectacleDirector.Instance?.SetReplayActive(false);
+
+            if (followCamera != null)
+                followCamera.enabled = true;
+        }
+
+        static void DetectOvertakes(RacerTrack player, RacerTrack rival, ref OvertakeCandidate? best)
+        {
+            var rivalWasAhead = false;
+            for (var i = 1; i < player.Frames.Count; i++)
+            {
+                var frame = player.Frames[i];
+                if (!TrySampleTrackAtTime(rival.Frames, frame.Time, out var rivalPosition, out _))
+                    continue;
+
+                var offset = rivalPosition - frame.Position;
+                offset.y = 0f;
+                if (offset.sqrMagnitude < 4f)
+                    continue;
+
+                var forward = frame.Rotation * Vector3.forward;
+                forward.y = 0f;
+                if (forward.sqrMagnitude < 0.01f)
+                    continue;
+
+                forward.Normalize();
+                var rivalAhead = Vector3.Dot(forward, offset) > 0f;
+                if (rivalWasAhead && !rivalAhead)
+                {
+                    var score = 1f / Mathf.Max(offset.magnitude, 5f);
+                    if (!best.HasValue || score > best.Value.Score)
+                        best = new OvertakeCandidate { Time = frame.Time, Score = score };
+                }
+
+                rivalWasAhead = rivalAhead;
+            }
+        }
+
+        static bool TrySampleTrackAtTime(List<ReplayFrame> frames, float time, out Vector3 position, out Quaternion rotation)
+        {
+            position = Vector3.zero;
+            rotation = Quaternion.identity;
+            if (frames == null || frames.Count == 0)
+                return false;
+
+            SampleTrack(frames, time, out position, out rotation);
+            return true;
         }
 
         static bool WasSkipPressed()
         {
             var keyboard = Keyboard.current;
             return keyboard != null && keyboard.spaceKey.wasPressedThisFrame;
+        }
+
+        static bool WasSaveGhostPressed()
+        {
+            var keyboard = Keyboard.current;
+            return keyboard != null && keyboard.gKey.wasPressedThisFrame;
+        }
+
+        void UpdateReplayHint()
+        {
+            if (replayHintText == null)
+                return;
+
+            if (Time.time < saveGhostFeedbackEndTime)
+                return;
+
+            replayHintText.text = GhostReplayBridge.CanSaveToPbStore
+                ? "SPACE SKIP  •  G SAVE HIGHLIGHT AS LAP GHOST"
+                : "SPACE TO SKIP";
         }
 
         void PrepareRacersForPlayback()
@@ -278,43 +509,11 @@ namespace NeonLap.Race
 
         static void SampleTrack(List<ReplayFrame> frames, float time, out Vector3 position, out Quaternion rotation)
         {
-            if (frames.Count == 1)
-            {
-                position = frames[0].Position;
-                rotation = frames[0].Rotation;
-                return;
-            }
+            var snapshots = new List<ReplayFrameSnapshot>(frames.Count);
+            for (var i = 0; i < frames.Count; i++)
+                snapshots.Add(frames[i].ToSnapshot());
 
-            if (time <= frames[0].Time)
-            {
-                position = frames[0].Position;
-                rotation = frames[0].Rotation;
-                return;
-            }
-
-            var last = frames[^1];
-            if (time >= last.Time)
-            {
-                position = last.Position;
-                rotation = last.Rotation;
-                return;
-            }
-
-            for (var i = 0; i < frames.Count - 1; i++)
-            {
-                var a = frames[i];
-                var b = frames[i + 1];
-                if (time > b.Time)
-                    continue;
-
-                var t = Mathf.InverseLerp(a.Time, b.Time, time);
-                position = Vector3.Lerp(a.Position, b.Position, t);
-                rotation = Quaternion.Slerp(a.Rotation, b.Rotation, t);
-                return;
-            }
-
-            position = last.Position;
-            rotation = last.Rotation;
+            GhostPlaybackSampler.Sample(snapshots, time, out position, out rotation);
         }
 
         ReplayCameraShot GetShotForPlaybackTime(float shotTime, float totalDuration)
@@ -366,6 +565,7 @@ namespace NeonLap.Race
                 ReplayCameraShot.LowHero => new Vector3(-3.5f, 1.4f, 7f),
                 ReplayCameraShot.Wide => new Vector3(0f, 10f, -22f),
                 ReplayCameraShot.FinishDrama => new Vector3(2f, 3.2f, -16f),
+                ReplayCameraShot.OvertakeDrama => new Vector3(7.5f, 2.1f, -2.5f),
                 _ => new Vector3(0f, 4f, -12f)
             };
         }
@@ -377,6 +577,7 @@ namespace NeonLap.Race
                 ReplayCameraShot.Wide => 68f,
                 ReplayCameraShot.LowHero => 58f,
                 ReplayCameraShot.FinishDrama => 52f,
+                ReplayCameraShot.OvertakeDrama => 56f,
                 _ => 62f
             };
         }
@@ -404,8 +605,10 @@ namespace NeonLap.Race
                 new Color(0.45f, 1f, 1f), FontStyle.Bold);
 
             replayHintText = CreateOverlayText(replayOverlay.transform, "ReplayHint", "SPACE TO SKIP",
-                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -72f), 22,
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -72f), 20,
                 new Color(0.85f, 0.9f, 1f, 0.85f), FontStyle.Normal);
+            var hintRect = replayHintText.GetComponent<RectTransform>();
+            hintRect.sizeDelta = new Vector2(900f, 56f);
 
             replayOverlay.SetActive(false);
         }

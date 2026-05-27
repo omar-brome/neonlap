@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using NeonLap.Core;
 using NeonLap.Input;
 using NeonLap.Race;
 using NeonLap.Vehicle;
@@ -42,9 +43,18 @@ namespace NeonLap.UI
             public float Velocity;
         }
 
+        struct DamageGaugeVisual
+        {
+            public Image FillBar;
+            public Text Readout;
+            public float DisplayLevel;
+            public float Velocity;
+            public bool Visible;
+        }
+
         [SerializeField] float speedMaxMph = 120f;
         [SerializeField] float rpmMax = 8000f;
-        [SerializeField] float fuelDepletionDuration = 420f;
+        [SerializeField] float fuelDepletionDuration;
         [SerializeField] float needleSmoothTime = 0.12f;
         [SerializeField] float turnSignalSteerThreshold = 0.12f;
         [SerializeField] float turnSignalBlinkInterval = 0.45f;
@@ -52,7 +62,14 @@ namespace NeonLap.UI
         GaugeVisual speedGauge;
         GaugeVisual rpmGauge;
         FuelGaugeVisual fuelGauge;
+        DamageGaugeVisual damageGauge;
         RectTransform clusterRoot;
+        Image clusterBezel;
+        Text nitroReadout;
+        Text slipReadout;
+        Text driftZoneReadout;
+        Text ghostDeltaReadout;
+        Text medalProgressReadout;
         Text turnSignalLeft;
         Text turnSignalRight;
         Image turnSignalLeftGlow;
@@ -60,9 +77,15 @@ namespace NeonLap.UI
         readonly List<WarningLightVisual> warningLights = new();
 
         RaceManager raceManager;
+        RaceScoreSystem raceScoreSystem;
         VehicleController playerVehicle;
         VehicleFuelSystem playerFuel;
+        VehicleHealthSystem playerHealth;
+        VehicleDamageSystem playerDamage;
         VehicleNitroBoost nitroBoost;
+        VehicleSlipEffect playerSlip;
+        DriftZonePresence driftZonePresence;
+        GhostHudController ghostHud;
         Rigidbody playerRigidbody;
         IVehicleInputProvider inputProvider;
         Font uiFont;
@@ -82,24 +105,66 @@ namespace NeonLap.UI
                 0f, 8f, 130f, -130f, "x1000 RPM", new Color(1f, 0.62f, 0.18f),
                 new[] { 0f, 2f, 4f, 6f, 8f });
             BuildFuelGauge(clusterRoot);
+            BuildDamageGauge(clusterRoot);
             BuildTurnSignalIndicators(clusterRoot);
             BuildWarningLights(clusterRoot);
+            BuildTelemetryReadouts(clusterRoot);
             built = true;
         }
 
-        public void Configure(RaceManager manager, VehicleController player)
+        public void Configure(RaceManager manager, VehicleController player, GhostHudController ghostHudController = null,
+            RaceScoreSystem scoreSystem = null)
         {
             raceManager = manager;
+            raceScoreSystem = scoreSystem;
+            ghostHud = ghostHudController;
             playerVehicle = player;
             playerFuel = player != null ? player.GetComponent<VehicleFuelSystem>() : null;
+            playerHealth = player != null ? player.GetComponent<VehicleHealthSystem>() : null;
+            playerDamage = player != null ? player.GetComponent<VehicleDamageSystem>() : null;
             playerRigidbody = player != null ? player.GetComponent<Rigidbody>() : null;
             nitroBoost = player != null ? player.GetComponent<VehicleNitroBoost>() : null;
+            playerSlip = player != null ? player.GetComponent<VehicleSlipEffect>() : null;
+            driftZonePresence = player != null ? player.GetComponent<DriftZonePresence>() : null;
             inputProvider = player != null ? player.GetComponent<IVehicleInputProvider>() : null;
 
             if (playerFuel != null)
-                playerFuel.Configure(fuelDepletionDuration, manager);
+            {
+                var tankDuration = fuelDepletionDuration > 0.01f
+                    ? fuelDepletionDuration
+                    : GameFuelEconomy.GetTankDuration(GameLapSettings.CurrentLaps);
+                playerFuel.Configure(tankDuration, manager);
+            }
 
             ScheduleInitialWarningLights();
+            ApplyProfileSkin(player?.Profile);
+        }
+
+        public void ApplyProfileSkin(VehicleProfile profile)
+        {
+            if (!built || profile == null)
+                return;
+
+            var kind = PlayerVehicleProfileStore.GetKindForProfile(profile);
+            var skin = PlayerVehicleProfileStore.GetDashboardSkin(kind);
+            speedMaxMph = Mathf.Max(profile.maxSpeed * MetersPerSecondToMph, 60f);
+            speedGauge.MaxValue = speedMaxMph;
+
+            SetNeedleColor(speedGauge.Needle, skin.SpeedNeedleColor);
+            SetNeedleColor(rpmGauge.Needle, skin.RpmNeedleColor);
+
+            if (clusterBezel != null)
+                clusterBezel.color = skin.BezelColor;
+        }
+
+        static void SetNeedleColor(RectTransform needle, Color color)
+        {
+            if (needle == null)
+                return;
+
+            var image = needle.GetComponent<Image>();
+            if (image != null)
+                image.color = color;
         }
 
         public void SetVisible(bool visible)
@@ -121,8 +186,10 @@ namespace NeonLap.UI
             ResolvePlayerReferences();
             UpdateGauges();
             UpdateFuelGauge();
+            UpdateDamageGauge();
             UpdateTurnSignalIndicators();
             UpdateWarningLights();
+            UpdateTelemetryReadouts();
         }
 
         void ResolvePlayerReferences()
@@ -140,9 +207,14 @@ namespace NeonLap.UI
 
                 playerVehicle ??= racer.GetComponent<VehicleController>();
                 playerFuel ??= racer.GetComponent<VehicleFuelSystem>();
+                playerHealth ??= racer.GetComponent<VehicleHealthSystem>();
+                playerDamage ??= racer.GetComponent<VehicleDamageSystem>();
                 playerRigidbody ??= racer.GetComponent<Rigidbody>();
                 nitroBoost ??= racer.GetComponent<VehicleNitroBoost>();
+                playerSlip ??= racer.GetComponent<VehicleSlipEffect>();
+                driftZonePresence ??= racer.GetComponent<DriftZonePresence>();
                 inputProvider ??= racer.GetComponent<IVehicleInputProvider>();
+                ApplyProfileSkin(playerVehicle?.Profile);
                 return;
             }
         }
@@ -183,6 +255,20 @@ namespace NeonLap.UI
             if (fuelGauge.FillBar == null)
                 return;
 
+            var hideFuel = playerFuel != null && playerFuel.IsInfinite;
+            var gaugeRoot = fuelGauge.FillBar.transform.parent != null
+                ? fuelGauge.FillBar.transform.parent.gameObject
+                : null;
+            if (gaugeRoot != null && gaugeRoot.activeSelf == hideFuel)
+                gaugeRoot.SetActive(!hideFuel);
+
+            if (hideFuel)
+            {
+                if (fuelGauge.RefillPrompt != null)
+                    fuelGauge.RefillPrompt.gameObject.SetActive(false);
+                return;
+            }
+
             var targetLevel = GetFuelLevel();
             fuelGauge.DisplayLevel = Mathf.SmoothDamp(fuelGauge.DisplayLevel, targetLevel, ref fuelGauge.Velocity,
                 needleSmoothTime);
@@ -209,6 +295,117 @@ namespace NeonLap.UI
                         : new Color(1f, 0.55f, 0.12f, 0.55f);
                 }
             }
+        }
+
+        float GetPlayerDamagePercent()
+        {
+            if (playerHealth != null && playerHealth.enabled)
+                return playerHealth.DamagePercent * 100f;
+
+            if (playerDamage != null)
+                return playerDamage.DamagePercent * 100f;
+
+            return 0f;
+        }
+
+        bool ShouldShowDamageGauge()
+        {
+            return RaceModeDamageRules.GetDamageProfile().DamageMode != VehicleDamageMode.Off;
+        }
+
+        void UpdateDamageGauge()
+        {
+            if (damageGauge.FillBar == null)
+                return;
+
+            var show = ShouldShowDamageGauge();
+            if (damageGauge.FillBar.transform.parent != null)
+                damageGauge.FillBar.transform.parent.gameObject.SetActive(show);
+
+            if (!show)
+                return;
+
+            var targetDamage = Mathf.Clamp01(GetPlayerDamagePercent() / 100f);
+            damageGauge.DisplayLevel = Mathf.SmoothDamp(damageGauge.DisplayLevel, targetDamage, ref damageGauge.Velocity,
+                needleSmoothTime);
+            damageGauge.FillBar.fillAmount = damageGauge.DisplayLevel;
+
+            var fillColor = damageGauge.DisplayLevel > 0.65f
+                ? Color.Lerp(new Color(1f, 0.72f, 0.2f), new Color(1f, 0.22f, 0.12f),
+                    (damageGauge.DisplayLevel - 0.65f) / 0.35f)
+                : Color.Lerp(new Color(0.35f, 0.95f, 1f), new Color(1f, 0.72f, 0.2f), damageGauge.DisplayLevel / 0.65f);
+            damageGauge.FillBar.color = fillColor;
+
+            if (damageGauge.Readout != null)
+                damageGauge.Readout.text = Mathf.RoundToInt(damageGauge.DisplayLevel * 100f) + "% DMG";
+        }
+
+        void BuildDamageGauge(RectTransform parent)
+        {
+            var gaugeGo = new GameObject("DamageGauge");
+            gaugeGo.transform.SetParent(parent, false);
+            var gaugeRect = gaugeGo.AddComponent<RectTransform>();
+            gaugeRect.anchorMin = new Vector2(0.5f, 0f);
+            gaugeRect.anchorMax = new Vector2(0.5f, 0f);
+            gaugeRect.pivot = new Vector2(0.5f, 0f);
+            gaugeRect.anchoredPosition = new Vector2(0f, 8f);
+            gaugeRect.sizeDelta = new Vector2(168f, 52f);
+
+            CreateImage(gaugeGo.transform, "DamagePanel", Vector2.zero, new Vector2(168f, 52f),
+                new Color(0.06f, 0.08f, 0.11f, 0.95f));
+
+            var titleGo = new GameObject("DamageTitle");
+            titleGo.transform.SetParent(gaugeGo.transform, false);
+            var titleRect = titleGo.AddComponent<RectTransform>();
+            titleRect.anchorMin = new Vector2(0.5f, 0f);
+            titleRect.anchorMax = new Vector2(0.5f, 0f);
+            titleRect.pivot = new Vector2(0.5f, 0f);
+            titleRect.anchoredPosition = new Vector2(0f, 30f);
+            titleRect.sizeDelta = new Vector2(168f, 18f);
+            var title = titleGo.AddComponent<Text>();
+            title.font = uiFont;
+            title.fontSize = 13;
+            title.fontStyle = FontStyle.Bold;
+            title.alignment = TextAnchor.MiddleCenter;
+            title.color = new Color(0.72f, 0.78f, 0.84f);
+            title.text = "HULL";
+            title.raycastTarget = false;
+
+            CreateImage(gaugeGo.transform, "DamageTrack", new Vector2(0f, 12f), new Vector2(140f, 14f),
+                new Color(0.12f, 0.14f, 0.18f, 0.98f));
+
+            var fillRect = CreateImage(gaugeGo.transform, "DamageFill", new Vector2(0f, 12f), new Vector2(136f, 10f),
+                new Color(0.35f, 0.95f, 1f));
+            var fillImage = fillRect.GetComponent<Image>();
+            fillImage.type = Image.Type.Filled;
+            fillImage.fillMethod = Image.FillMethod.Horizontal;
+            fillImage.fillOrigin = (int)Image.OriginHorizontal.Left;
+            fillImage.fillAmount = 0f;
+
+            var readoutGo = new GameObject("DamageReadout");
+            readoutGo.transform.SetParent(gaugeGo.transform, false);
+            var readoutRect = readoutGo.AddComponent<RectTransform>();
+            readoutRect.anchorMin = new Vector2(0.5f, 0f);
+            readoutRect.anchorMax = new Vector2(0.5f, 0f);
+            readoutRect.pivot = new Vector2(0.5f, 0f);
+            readoutRect.anchoredPosition = new Vector2(0f, -2f);
+            readoutRect.sizeDelta = new Vector2(168f, 18f);
+            var readout = readoutGo.AddComponent<Text>();
+            readout.font = uiFont;
+            readout.fontSize = 12;
+            readout.fontStyle = FontStyle.Bold;
+            readout.alignment = TextAnchor.MiddleCenter;
+            readout.color = new Color(0.45f, 1f, 1f);
+            readout.text = "0% DMG";
+            readout.raycastTarget = false;
+
+            damageGauge = new DamageGaugeVisual
+            {
+                FillBar = fillImage,
+                Readout = readout,
+            };
+
+            gaugeGo.SetActive(false);
         }
 
         void BuildFuelGauge(RectTransform parent)
@@ -287,7 +484,7 @@ namespace NeonLap.UI
             prompt.fontStyle = FontStyle.Bold;
             prompt.alignment = TextAnchor.MiddleCenter;
             prompt.color = new Color(1f, 0.82f, 0.18f);
-            prompt.text = "PRESS R TO REFILL GAS";
+            prompt.text = "HIT FUEL PAD / NITRO  ·  R TO REFILL";
             prompt.raycastTarget = false;
             promptGo.SetActive(false);
 
@@ -494,10 +691,10 @@ namespace NeonLap.UI
             rect.anchoredPosition = new Vector2(0f, 8f);
             rect.sizeDelta = new Vector2(560f, 250f);
 
-            var bezel = root.AddComponent<Image>();
-            bezel.sprite = UiSpriteUtility.White;
-            bezel.color = new Color(0.03f, 0.05f, 0.08f, 0.88f);
-            bezel.raycastTarget = false;
+            clusterBezel = root.AddComponent<Image>();
+            clusterBezel.sprite = UiSpriteUtility.White;
+            clusterBezel.color = new Color(0.03f, 0.05f, 0.08f, 0.88f);
+            clusterBezel.raycastTarget = false;
             return rect;
         }
 
@@ -618,6 +815,173 @@ namespace NeonLap.UI
                 label.text = tick >= 10f ? tick.ToString("0") : tick.ToString("0.#");
                 label.raycastTarget = false;
             }
+        }
+
+        void BuildTelemetryReadouts(RectTransform parent)
+        {
+            var panel = new GameObject("TelemetryReadouts");
+            panel.transform.SetParent(parent, false);
+            var panelRect = panel.AddComponent<RectTransform>();
+            panelRect.anchorMin = new Vector2(0.5f, 0f);
+            panelRect.anchorMax = new Vector2(0.5f, 0f);
+            panelRect.pivot = new Vector2(0.5f, 0f);
+            panelRect.anchoredPosition = new Vector2(0f, 132f);
+            panelRect.sizeDelta = new Vector2(520f, 88f);
+
+            nitroReadout = CreateTelemetryText(panel.transform, "NitroReadout", new Vector2(0f, 66f), 15);
+            slipReadout = CreateTelemetryText(panel.transform, "SlipReadout", new Vector2(0f, 48f), 15);
+            driftZoneReadout = CreateTelemetryText(panel.transform, "DriftZoneReadout", new Vector2(0f, 30f), 14);
+            ghostDeltaReadout = CreateTelemetryText(panel.transform, "GhostDeltaReadout", new Vector2(0f, 12f), 15);
+            medalProgressReadout = CreateTelemetryText(panel.transform, "MedalProgressReadout", new Vector2(0f, -4f), 14);
+            nitroReadout.text = "NITRO  --";
+            slipReadout.text = string.Empty;
+            driftZoneReadout.text = string.Empty;
+            ghostDeltaReadout.text = string.Empty;
+            medalProgressReadout.text = string.Empty;
+            slipReadout.gameObject.SetActive(false);
+            driftZoneReadout.gameObject.SetActive(false);
+            ghostDeltaReadout.gameObject.SetActive(false);
+        }
+
+        Text CreateTelemetryText(Transform parent, string name, Vector2 anchoredPosition, int fontSize)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            var rect = go.AddComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0.5f, 0f);
+            rect.anchorMax = new Vector2(0.5f, 0f);
+            rect.pivot = new Vector2(0.5f, 0f);
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = new Vector2(520f, 20f);
+
+            var text = go.AddComponent<Text>();
+            text.font = uiFont;
+            text.fontSize = fontSize;
+            text.fontStyle = FontStyle.Bold;
+            text.alignment = TextAnchor.MiddleCenter;
+            text.color = new Color(0.7f, 0.92f, 1f, 0.92f);
+            text.raycastTarget = false;
+            return text;
+        }
+
+        void UpdateTelemetryReadouts()
+        {
+            if (nitroReadout != null)
+            {
+                if (nitroBoost == null)
+                {
+                    nitroReadout.text = "NITRO  --";
+                }
+                else if (nitroBoost.IsActive)
+                {
+                    nitroReadout.text = "NITRO  BOOST";
+                    nitroReadout.color = new Color(0.45f, 0.95f, 1f);
+                }
+                else
+                {
+                    nitroReadout.text = $"NITRO  {nitroBoost.Charges}/{nitroBoost.MaxCharges}";
+                    nitroReadout.color = nitroBoost.Charges > 0
+                        ? new Color(0.7f, 0.92f, 1f, 0.92f)
+                        : new Color(0.75f, 0.55f, 0.55f, 0.9f);
+                }
+            }
+
+            if (ghostDeltaReadout != null)
+            {
+                var showGhost = ghostHud != null
+                                && (GameRaceModeSettings.IsTimeTrial || GameRaceModeSettings.IsGhostDuel);
+                ghostDeltaReadout.gameObject.SetActive(showGhost);
+                if (showGhost)
+                    UpdateGhostDeltaReadout();
+            }
+
+            if (medalProgressReadout != null)
+            {
+                var line = HudMedalProgressFormatter.GetDashboardLine(raceManager, raceScoreSystem);
+                medalProgressReadout.gameObject.SetActive(!string.IsNullOrEmpty(line));
+                medalProgressReadout.text = line;
+            }
+
+            UpdateSlipReadout();
+            UpdateDriftZoneReadout();
+        }
+
+        void UpdateSlipReadout()
+        {
+            if (slipReadout == null)
+                return;
+
+            if (playerSlip == null || !playerSlip.IsSlipping)
+            {
+                slipReadout.gameObject.SetActive(false);
+                return;
+            }
+
+            slipReadout.gameObject.SetActive(true);
+            var remaining = playerSlip.SlipTimeRemaining;
+            slipReadout.text = $"BANANA SLIP  {remaining:0.0}s";
+            slipReadout.color = Color.Lerp(new Color(1f, 0.85f, 0.25f), new Color(1f, 0.35f, 0.35f),
+                1f - Mathf.Clamp01(remaining / Mathf.Max(playerSlip.SlipDuration, 0.01f)));
+        }
+
+        void UpdateDriftZoneReadout()
+        {
+            if (driftZoneReadout == null)
+                return;
+
+            var inZone = driftZonePresence != null && driftZonePresence.InDriftZone;
+            if (!inZone)
+            {
+                var registry = Track.TrackGameplayZoneRegistry.Instance;
+                if (registry != null && playerVehicle != null)
+                {
+                    var query = new Track.TrackZoneQueryResult();
+                    registry.Query(playerVehicle.transform.position, ref query);
+                    inZone = query.InDriftMultiplier;
+                    if (inZone)
+                    {
+                        driftZoneReadout.gameObject.SetActive(true);
+                        driftZoneReadout.text = $"DRIFT ZONE  x{query.DriftScoreMultiplier:0.0}";
+                        driftZoneReadout.color = new Color(1f, 0.82f, 0.25f);
+                        return;
+                    }
+                }
+
+                driftZoneReadout.gameObject.SetActive(false);
+                return;
+            }
+
+            driftZoneReadout.gameObject.SetActive(true);
+            driftZoneReadout.text = $"DRIFT ZONE  x{driftZonePresence.ActiveMultiplier:0.0}";
+            driftZoneReadout.color = new Color(1f, 0.82f, 0.25f);
+        }
+
+        void UpdateGhostDeltaReadout()
+        {
+            if (ghostDeltaReadout == null || ghostHud == null || playerVehicle == null)
+                return;
+
+            var ghost = ghostHud.PrimaryGhost;
+            if (ghost == null || !ghost.IsVisible || !ghost.HasGhost)
+            {
+                ghostDeltaReadout.text = "GHOST  OFF";
+                ghostDeltaReadout.color = new Color(0.75f, 0.85f, 1f, 0.85f);
+                return;
+            }
+
+            if (!ghost.TryGetDeltaSeconds(playerVehicle.transform.position, out var delta))
+            {
+                ghostDeltaReadout.text = "GHOST  --";
+                return;
+            }
+
+            var label = ghost.IsDevGhost ? "DEV" : "PB";
+            ghostDeltaReadout.text = $"GHOST  {label} {GhostPlaybackDelta.FormatDelta(delta)}";
+            ghostDeltaReadout.color = delta < -0.01f
+                ? new Color(0.35f, 1f, 0.65f)
+                : delta > 0.01f
+                    ? new Color(1f, 0.45f, 0.55f)
+                    : new Color(0.55f, 0.95f, 1f);
         }
 
         void BuildTurnSignalIndicators(RectTransform parent)

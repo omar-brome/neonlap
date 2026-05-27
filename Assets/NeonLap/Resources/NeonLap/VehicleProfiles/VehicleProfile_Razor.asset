@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c3e5a7b9c1d3e5f7a9b1c3d5e7f9a1b3, type: 3}
+  m_Name: VehicleProfile_Razor
+  m_EditorClassIdentifier: 
+  maxSpeed: 48
+  acceleration: 36
+  brakeForce: 52
+  reverseForce: 18
+  turnSpeedLow: 118
+  turnSpeedHigh: 48
+  grip: 16
+  driftGripMultiplier: 0.38
+  handbrakeGripMultiplier: 0.14
+  driftRecovery: 5.2
+  driftMinSpeed: 7
+  driftSteerMultiplier: 1.25
+  driftLateralPush: 11
+  driftForwardBoost: 5
+  powerSlideGrip: 0.7
+  driftSlipThreshold: 3.1
+  hoverHeight: 1.15
+  hoverForce: 82
+  hoverDamping: 8
+  downforce: 28

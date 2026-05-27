@@ -10,7 +10,7 @@ namespace NeonLap.Track
         const float MarkThickness = 0.018f;
 
         public static void Build(Transform trackRoot, IReadOnlyList<Vector3> centerline, float trackWidth,
-            TrackLayout layout = TrackLayout.Oval)
+            TrackLayout layout = TrackLayout.Oval, bool reverseCircuit = false)
         {
             if (trackRoot == null || centerline == null || centerline.Count < 2)
                 return;
@@ -39,8 +39,8 @@ namespace NeonLap.Track
                     BuildDashedLine(markingsRoot, a, b, -trackWidth * 0.22f, whiteMat, 4f, 4.2f, 0.15f);
                 }
 
-                if (layout == TrackLayout.TechnicalRing && i % 3 == 0)
-                    BuildDirectionArrow(markingsRoot, a, b, arrowMat);
+                if (IsZigZagLayout(layout) && i % 2 == 0)
+                    BuildDirectionArrow(markingsRoot, reverseCircuit ? b : a, reverseCircuit ? a : b, arrowMat);
             }
 
             BuildStartFinishLine(markingsRoot, centerline[0], centerline[1], trackWidth, whiteMat, blackMat);
@@ -207,21 +207,60 @@ namespace NeonLap.Track
             return material;
         }
 
+        public static void BuildShortcutMarkings(Transform shortcutRoot, IReadOnlyList<Vector3> path, float trackWidth)
+        {
+            if (shortcutRoot == null || path == null || path.Count < 2)
+                return;
+
+            var shortcutMat = CreateMarkingMaterial(new Color(0.2f, 1f, 0.95f));
+            for (var i = 0; i < path.Count - 1; i++)
+            {
+                var a = path[i];
+                var b = path[i + 1];
+                BuildDashedLine(shortcutRoot, a, b, 0f, shortcutMat, 2.4f, 2.6f, 0.34f);
+                BuildSolidLine(shortcutRoot, a, b, trackWidth * 0.42f, shortcutMat, 0.18f);
+                BuildSolidLine(shortcutRoot, a, b, -trackWidth * 0.42f, shortcutMat, 0.18f);
+            }
+        }
+
+        static bool IsZigZagLayout(TrackLayout layout) => TrackLayoutUtility.IsComplexLayout(layout);
+
         public static void ApplyAsphaltLook(Material surface, Material curb)
+        {
+            ApplyAsphaltLook(surface, curb, new Color(0.1f, 0.1f, 0.11f), new Color(0.52f, 0.5f, 0.48f));
+        }
+
+        public static void ApplyAsphaltLook(Material surface, Material curb, Color asphaltColor, Color curbColor)
         {
             if (surface != null)
             {
-                surface.SetColor("_BaseColor", new Color(0.1f, 0.1f, 0.11f));
+                surface.SetColor("_BaseColor", asphaltColor);
                 surface.SetFloat("_Smoothness", 0.16f);
                 surface.SetFloat("_Metallic", 0.02f);
             }
 
             if (curb != null)
             {
-                curb.SetColor("_BaseColor", new Color(0.52f, 0.5f, 0.48f));
+                curb.SetColor("_BaseColor", curbColor);
                 curb.SetFloat("_Smoothness", 0.42f);
                 curb.SetFloat("_Metallic", 0f);
             }
+        }
+
+        public static void ApplyNeonEdgeLook(Material curb)
+        {
+            ApplyNeonEdgeLook(curb, new Color(0.25f, 1.1f, 1.35f), new Color(0.18f, 0.82f, 0.95f));
+        }
+
+        public static void ApplyNeonEdgeLook(Material curb, Color emissionColor, Color baseColor)
+        {
+            if (curb == null)
+                return;
+
+            curb.EnableKeyword("_EMISSION");
+            curb.SetColor("_EmissionColor", emissionColor);
+            curb.SetColor("_BaseColor", baseColor);
+            curb.SetFloat("_Smoothness", 0.72f);
         }
     }
 }

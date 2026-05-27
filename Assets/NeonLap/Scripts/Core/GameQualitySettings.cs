@@ -32,6 +32,10 @@ namespace NeonLap.Core
 
         public static QualityPreset Preset => GetPreset(Current);
 
+        public static bool UseGpuInstancing => Current == QualityLevel.High;
+
+        public static bool UseProceduralLod => Current >= QualityLevel.Medium;
+
         public static void Load()
         {
             Current = (QualityLevel)PlayerPrefs.GetInt(PrefKey, (int)QualityLevel.Medium);
@@ -86,8 +90,8 @@ namespace NeonLap.Core
                     HazardDensity = 0.3f,
                     PickupDensity = 0.35f,
                     BananaDensity = 0.35f,
-                    CrowdDensity = 0.35f,
-                    EnvironmentDensity = 0.4f,
+                    CrowdDensity = 0.65f,
+                    EnvironmentDensity = 0.65f,
                     EnableRain = false,
                     RainIntensity = 0f,
                     EnableHelicopter = false,
@@ -114,8 +118,8 @@ namespace NeonLap.Core
                     HazardDensity = 0.65f,
                     PickupDensity = 0.65f,
                     BananaDensity = 0.65f,
-                    CrowdDensity = 0.65f,
-                    EnvironmentDensity = 0.7f,
+                    CrowdDensity = 0.85f,
+                    EnvironmentDensity = 0.85f,
                     EnableRain = true,
                     RainIntensity = 0.65f,
                     EnableHelicopter = true,

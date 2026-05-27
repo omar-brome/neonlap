@@ -71,7 +71,7 @@ namespace NeonLap.Vehicle
                 if (fuel != null && fuel.TryRefill())
                     return;
 
-                ResetVehicle();
+                ResetVehicle(manual: true);
             }
 
             if (Time.time - spawnTime < startupGracePeriod)
@@ -81,7 +81,7 @@ namespace NeonLap.Vehicle
                 return;
 
             if (transform.position.y < fallYThreshold)
-                ResetVehicle();
+                ResetVehicle(manual: false);
         }
 
         void FixedUpdate()
@@ -121,11 +121,11 @@ namespace NeonLap.Vehicle
                     }
                 }
 
-                ResetVehicle();
+                ResetVehicle(manual: false);
             }
         }
 
-        public void ResetVehicle()
+        public void ResetVehicle(bool manual = false)
         {
             if (aiController != null)
             {
@@ -150,6 +150,7 @@ namespace NeonLap.Vehicle
 
             offTrackTimer = 0f;
             spawnTime = Time.time;
+            GetComponent<RaceScoreSystem>()?.RegisterPlayerReset(manual);
 
             var position = respawnPoint != null ? respawnPoint.position : spawnPosition;
             var rotation = respawnPoint != null ? respawnPoint.rotation : spawnRotation;
